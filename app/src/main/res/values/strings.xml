@@ -1,0 +1,92 @@
+<resources>
+    <string name="app_name">AI Friend</string>
+
+    <!-- Voice UI -->
+    <string name="voice_ready">جاهز أسمعك</string>
+    <string name="voice_listening">بسمعك…</string>
+    <string name="voice_thinking">بفكر…</string>
+    <string name="voice_speaking_prefix">الرد: </string>
+    <string name="voice_error">حصل خطأ، جرّب تاني</string>
+
+    <!-- Connection states -->
+    <string name="conn_ready">متصل</string>
+    <string name="conn_degraded">مقيد</string>
+    <string name="conn_syncing">مزامنة…</string>
+    <string name="conn_starting">جاري البدء…</string>
+    <string name="conn_authenticating">مصادقة…</string>
+    <string name="conn_connecting">اتصال…</string>
+    <string name="conn_disconnected">غير متصل</string>
+
+    <!-- Voice download/init -->
+    <string name="voice_downloading_models">جاري تحميل نماذج الصوت…</string>
+    <string name="voice_initializing">تهيئة المحرك الصوتي…</string>
+    <string name="voice_download_progress">%1$d%%</string>
+
+    <!-- Climate commands -->
+    <string name="climate_on">شغلت التكييف</string>
+    <string name="climate_off">طفيت التكييف</string>
+    <string name="climate_auto_on">شغلت التكييف على وضع أوتوماتيك</string>
+    <string name="climate_auto_off">طفيت وضع أوتوماتيك للتكييف</string>
+    <string name="climate_temp_set">ضبطت التكييف على %1$d درجة</string>
+    <string name="climate_fan_set">ضبطت سرعة المروحة على %1$d</string>
+    <string name="climate_recirc_on">شغلت إعادة تدوير الهواء</string>
+    <string name="climate_recirc_off">طفيت إعادة تدوير الهواء</string>
+    <string name="climate_defrost_on">شغلت إزالة الضباب</string>
+    <string name="climate_defrost_off">طفيت إزالة الضباب</string>
+
+    <!-- Window commands -->
+    <string name="windows_all_open">فتحت كل الشبابيك</string>
+    <string name="windows_all_close">قفلت كل الشبابيك</string>
+    <string name="window_open">فتحت الشباك %1$s</string>
+    <string name="window_close">قفلت الشباك %1$s</string>
+    <string name="window_vent">فتح الشباك %1$s للتهوية</string>
+    <string name="window_pos_set">ضبطت الشباك %1$s على %2$d%%</string>
+
+    <!-- Sunroof -->
+    <string name="sunroof_open">فتحت السقف</string>
+    <string name="sunroof_close">قفلت السقف</string>
+    <string name="sunroof_tilt">مّلت السقف</string>
+    <string name="sunshade_open">فتحت ستارة السقف</string>
+    <string name="sunshade_close">قفلت ستارة السقف</string>
+
+    <!-- Doors/Locks -->
+    <string name="doors_locked">قفلت الأبواب</string>
+    <string name="doors_unlocked">فتحت الأبواب</string>
+    <string name="frunk_open">فتحت الشنطة الأمامية</string>
+    <string name="frunk_close">قفلت الشنطة الأمامية</string>
+
+    <!-- Seats -->
+    <string name="seat_heat_on">شغلت تدفئة الكرسي %1$s</string>
+    <string name="seat_heat_off">طفيت تدفئة الكرسي %1$s</string>
+    <string name="seat_vent_on">شغلت تهوية الكرسي %1$s</string>
+    <string name="seat_vent_off">طفيت تهوية الكرسي %1$s</string>
+    <string name="seat_level_set">ضبطت %1$s الكرسي %2$s على مستوى %3$d</string>
+
+    <!-- Steering -->
+    <string name="steering_heat_on">شغلت تدفئة الدركسيون</string>
+    <string name="steering_heat_off">طفيت تدفئة الدركسيون</string>
+
+    <!-- Drive mode -->
+    <string name="drive_mode_set">ضبطت وضع القيادة على %1$s</string>
+
+    <!-- Telemetry queries -->
+    <string name="telemetry_soc">البطارية %1$d%%</string>
+    <string name="telemetry_range">المدى المتبقي %1$d كيلومتر</string>
+    <string name="telemetry_inside_temp">درجة حرارة الكابينة %1$.1f°س</string>
+    <string name="telemetry_outside_temp">درجة الحرارة بالخارج %1$.1f°س</string>
+    <string name="telemetry_battery_temp">درجة حرارة البطارية %1$.1f°س</string>
+    <string name="telemetry_12v">بطارية 12 فولت: %1$.1f فولت</string>
+    <string name="telemetry_tpms">ضغط الإطارات: أمامي %1$d/%2$d، خلفي %3$d/%4$d كيلوباسكال</string>
+    <string name="telemetry_charging">جارٍ الشحن: %1$.1f كيلوواط</string>
+
+    <!-- General -->
+    <string name="confirm_action">متأكد؟</string>
+    <string name="action_cancelled">تم الإلغاء</string>
+    <string name="command_not_understood">مش فاهم الأمر، جرّب تاني أو قل "ساعدني"</string>
+    <string name="help_text">الأوامر المتاحة:\n• التكييف: شغّل/طفي، أوتوماتيك، درجة كذا، مروحة كذا\n• الشبابيك: افتح/قفل (الكل/السائق/الراكب/الخلف)\n• السقف: افتح/قفل/ميل/ستارة\n• الأبواب: قفل/فتح\n• الكراسي: تدفئة/تهوية (السائق/الراكب) مستوى كذا\n• الدركسيون: تدفئة شغّل/طفي\n• استعلامات: كام في المية؟، المدى، الحرارة، الضغط، الشحن\n• وضع القيادة: اقتصادي/رياضي/عادي/ثلج/رمل/طين/جبل/ذكي</string>
+
+    <!-- LLM Fallback -->
+    <string name="llm_thinking">بفكر بمساعدة الذكاء الاصطناعي…</string>
+    <string name="llm_error">خدمة الذكاء الاصطناعي غير متاحة حالياً</string>
+    <string name="llm_offline">الوضع أوفلاين - الأوامر الصوتية فقط</string>
+</resources>
