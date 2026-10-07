@@ -12,9 +12,13 @@ enum class FaceState {
     SURPRISED,
 }
 
+enum class CaptionSpeaker { YOU, ASSISTANT }
+
 data class AiFriendUiState(
     val faceState: FaceState = FaceState.IDLE,
     val transcript: String = "",
+    val caption: String = "أنا آدم، رفيقك في العربية. اضغط واتكلم.",
+    val captionSpeaker: CaptionSpeaker = CaptionSpeaker.ASSISTANT,
     val isListening: Boolean = false,
     val isProcessing: Boolean = false,
     val isSpeaking: Boolean = false,

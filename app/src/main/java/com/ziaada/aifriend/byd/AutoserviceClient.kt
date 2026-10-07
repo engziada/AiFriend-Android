@@ -17,6 +17,9 @@ class AutoserviceClient(
     private val fidTable = ConcurrentHashMap<String, FidAddress>()
     private val parcelRegex = """Parcel\(00000000\s+([0-9a-fA-F]{8})""".toRegex()
     private val interfaceToken: String? = null
+    private val helperClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        HelperDaemonClient(context.applicationContext)
+    }
 
     init {
         FidRegistry.allReadNames().forEach { name ->
@@ -45,15 +48,13 @@ class AutoserviceClient(
 
     suspend fun writeInt(deviceId: Int, fid: Int, value: Int): Boolean {
         return withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val helper = HelperDaemonClient(context)
-            helper.writeInt(deviceId, fid, value)
+            helperClient.writeInt(deviceId, fid, value)
         }
     }
 
     suspend fun readBatch(requests: List<Pair<Int, Pair<Int, Int>>>): List<Int> {
         return withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val helper = HelperDaemonClient(context)
-            helper.readBatch(requests.map { (tx, devFid) -> Triple(tx, devFid.first, devFid.second) })
+            helperClient.readBatch(requests.map { (tx, devFid) -> Triple(tx, devFid.first, devFid.second) })
         }
     }
 

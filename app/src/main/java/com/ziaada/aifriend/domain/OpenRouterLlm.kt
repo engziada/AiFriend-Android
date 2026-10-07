@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
 
 class OpenRouterLlm(
     private val context: Context,
+    private val vehicleController: VehicleController,
+    private val appLauncher: AppLauncher,
 ) : LlmFallback {
     private val TAG = "OpenRouterLlm"
     private val strings = StringRes(context)
@@ -30,14 +32,11 @@ class OpenRouterLlm(
 
     private val apiUrl = "https://openrouter.ai/api/v1/chat/completions"
 
-    private val systemPrompt = """
-        أنت مساعد صوتي في سيارة BYD Song Plus. تتحدث بالعربية المصرية.
-        يمكنك تنفيذ أوامر السيارة عبر أدوات (tools) مثل: التكييف، الشبابيك، السقف، الأبواب، الكراسي، الاستعلامات.
-        كن مختصراً وودوداً. لا تشرح الأدوات للمستخدم - فقط نفذ وقل النتيجة.
-        """.trimIndent()
+    private val systemPrompt = AssistantPersona.SYSTEM_PROMPT
 
-    override suspend fun query(prompt: String): String {
-        val apiKey = prefs.getString("openrouter_key", "") ?: return strings.get(StringRes.llm_offline)
+    override suspend fun query(prompt: String, vehicleConnected: Boolean): String {
+        val apiKey = prefs.getString("openrouter_key", "")?.takeIf { it.isNotBlank() }
+            ?: return "أنا آدم. الأسئلة العامة محتاجة مفتاح OpenRouter من زر الإعدادات. أوامر السيارة وفتح التطبيقات المعروفة بتشتغل محلياً."
 
         return withContext(Dispatchers.IO) {
             try {
@@ -62,21 +61,26 @@ class OpenRouterLlm(
                     .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val response = client.newCall(request).execute()
-                if (!response.isSuccessful) {
-                    Log.w(TAG, "OpenRouter error: ${response.code} ${response.body?.string()}")
-                    return@withContext strings.get(StringRes.llm_error)
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "OpenRouter error: ${response.code} ${response.body?.string()}")
+                        return@withContext strings.get(StringRes.llm_error)
+                    }
+
+                    val json = JsonParser.parseString(response.body?.string() ?: "{}").asJsonObject
+                    val choice = json.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject
+                        ?: return@withContext strings.get(StringRes.llm_error)
+                    val message = choice.getAsJsonObject("message")
+                    val toolCalls = message.getAsJsonArray("tool_calls")
+
+                    if (toolCalls != null && toolCalls.size() > 0) {
+                        return@withContext handleToolCalls(toolCalls, vehicleConnected)
+                    }
+
+                    val content = message.get("content")
+                    return@withContext if (content != null && !content.isJsonNull) content.asString
+                    else "أنا آدم، ما وصلنيش رد واضح. ممكن تعيد السؤال؟"
                 }
-
-                val json = JsonParser.parseString(response.body?.string() ?: "{}").asJsonObject
-                val choice = json.getAsJsonArray("choices").get(0).asJsonObject
-                val message = choice.getAsJsonObject("message")
-
-                if (message.has("tool_calls")) {
-                    return@withContext handleToolCalls(message.getAsJsonArray("tool_calls"))
-                }
-
-                return@withContext message.get("content").asString ?: strings.get(StringRes.llm_error)
             } catch (e: IOException) {
                 Log.e(TAG, "Network error", e)
                 return@withContext strings.get(StringRes.llm_error)
@@ -97,7 +101,7 @@ class OpenRouterLlm(
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
-                            "action" to mapOf("type" to "string", "enum" to listOf("on", "off", "auto_on", "auto_off")),
+                            "action" to mapOf("type" to "string", "enum" to listOf("none", "on", "off", "auto_on", "auto_off")),
                             "temperature" to mapOf("type" to "integer", "minimum" to 16, "maximum" to 30),
                             "fan_level" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 7),
                             "recirculation" to mapOf("type" to "boolean"),
@@ -154,6 +158,18 @@ class OpenRouterLlm(
             mapOf(
                 "type" to "function",
                 "function" to mapOf(
+                    "name" to "set_frunk",
+                    "description" to "افتح أو أغلق الصندوق الأمامي عند طلب المستخدم بوضوح؛ الفتح متاح فقط والسيارة متوقفة.",
+                    "parameters" to mapOf(
+                        "type" to "object",
+                        "properties" to mapOf("action" to mapOf("type" to "string", "enum" to listOf("open", "close"))),
+                        "required" to listOf("action"),
+                    ),
+                ),
+            ),
+            mapOf(
+                "type" to "function",
+                "function" to mapOf(
                     "name" to "set_seat",
                     "description" to "تدفئة/تهوية الكراسي",
                     "parameters" to mapOf(
@@ -204,90 +220,207 @@ class OpenRouterLlm(
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
-                            "query" to mapOf("type" to "string", "enum" to listOf("soc", "range", "inside_temp", "outside_temp", "battery_temp", "voltage_12v", "tpms", "charging"))
+                            "query" to mapOf("type" to "string", "enum" to listOf("soc", "range", "inside_temp", "outside_temp", "climate_setpoint", "battery_temp", "voltage_12v", "speed", "power_kw", "soh", "tpms", "charging"))
                         ),
                         "required" to listOf("query")
                     )
                 )
+            ),
+            mapOf(
+                "type" to "function",
+                "function" to mapOf(
+                    "name" to "open_app",
+                    "description" to "افتح تطبيقاً مثبتاً عندما يطلب المستخدم ذلك صراحةً، باستخدام اسمه الظاهر على شاشة التطبيقات.",
+                    "parameters" to mapOf(
+                        "type" to "object",
+                        "properties" to mapOf("app_name" to mapOf("type" to "string")),
+                        "required" to listOf("app_name"),
+                    ),
+                ),
             )
         )
     }
 
-    private fun handleToolCalls(toolCalls: com.google.gson.JsonArray): String {
+    private suspend fun handleToolCalls(
+        toolCalls: com.google.gson.JsonArray,
+        vehicleConnected: Boolean,
+    ): String {
         val results = mutableListOf<String>()
         for (call in toolCalls) {
-            val fn = call.asJsonObject.get("function").asJsonObject
-            val name = fn.get("name").asString
-            val args = JsonParser.parseString(fn.get("arguments").asString).asJsonObject
-
-            val result = when (name) {
-                "set_climate" -> executeClimate(args)
-                "set_windows" -> executeWindows(args)
-                "set_sunroof" -> executeSunroof(args)
-                "set_doors" -> executeDoors(args)
-                "set_seat" -> executeSeat(args)
-                "set_steering_heat" -> executeSteering(args)
-                "set_drive_mode" -> executeDriveMode(args)
-                "get_telemetry" -> executeTelemetry(args)
-                else -> "أداة غير معروفة: $name"
+            val result = try {
+                val fn = call.asJsonObject.getAsJsonObject("function")
+                val name = fn.get("name").asString
+                val args = JsonParser.parseString(fn.get("arguments").asString).asJsonObject
+                if (name != "open_app" && !vehicleConnected) {
+                    "السيارة مش متصلة بخدمة التحكم دلوقتي، فما نفذتش أمر السيارة."
+                } else {
+                    when (name) {
+                        "set_climate" -> executeClimate(args)
+                        "set_windows" -> executeWindows(args)
+                        "set_sunroof" -> executeSunroof(args)
+                        "set_doors" -> executeDoors(args)
+                        "set_frunk" -> executeFrunk(args)
+                        "set_seat" -> executeSeat(args)
+                        "set_steering_heat" -> executeSteering(args)
+                        "set_drive_mode" -> executeDriveMode(args)
+                        "get_telemetry" -> executeTelemetry(args)
+                        "open_app" -> appLauncher.launch(args.get("app_name").asString).message
+                        else -> "مش قادر أنفذ الطلب ده لسه."
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Tool execution failed", e)
+                "ما قدرتش أنفذ الأمر: ${e.message ?: "حصل خطأ في خدمة السيارة"}"
             }
             results.add(result)
         }
         return results.joinToString("\n")
     }
 
-    private fun executeClimate(args: JsonObject): String {
+    private suspend fun executeClimate(args: JsonObject): String {
         val action = args.get("action").asString
-        val temp = args.get("temperature")?.asInt
-        val fan = args.get("fan_level")?.asInt
-        val recirc = args.get("recirculation")?.asBoolean
-        val defrost = args.get("defrost")?.asBoolean
-        return "تم تنفيذ: تكييف $action${temp?.let { " على $it درجة" } ?: ""}${fan?.let { "، مروحة $it" } ?: ""}${recirc?.let { if (it) "، تدوير داخلي" } ?: ""}${defrost?.let { if (it) "، إزالة ضباب" } ?: ""}"
+        val temp = args.intOrNull("temperature")
+        val fan = args.intOrNull("fan_level")
+        when (action) {
+            "none" -> Unit
+            "on" -> vehicleController.setClimatePower(true)
+            "off" -> vehicleController.setClimatePower(false)
+            "auto_on" -> vehicleController.setClimateAuto(true)
+            "auto_off" -> vehicleController.setClimateAuto(false)
+            else -> return "ما فهمتش وضع التكييف المطلوب."
+        }
+        if (temp != null) {
+            require(temp in 16..30) { "درجة التكييف لازم تكون من 16 إلى 30" }
+            vehicleController.setClimateTemperature(temp)
+        }
+        if (fan != null) {
+            require(fan in 1..7) { "سرعة المروحة لازم تكون من 1 إلى 7" }
+            vehicleController.setClimateFanLevel(fan)
+        }
+        args.booleanOrNull("recirculation")?.let { vehicleController.setRecirculation(it) }
+        args.booleanOrNull("defrost")?.let { vehicleController.setRearDefrost(it) }
+        return when (action) {
+            "none" -> "تمام، ضبطت التكييف${temp?.let { " على $it درجة" } ?: ""}."
+            "off" -> "تمام، طفيت التكييف."
+            "auto_on" -> "تمام، فعلت وضع التكييف التلقائي."
+            "auto_off" -> "تمام، أوقفت الوضع التلقائي."
+            else -> "تمام، شغلت التكييف${temp?.let { " على $it درجة" } ?: ""}."
+        }
     }
 
-    private fun executeWindows(args: JsonObject): String {
+    private suspend fun executeWindows(args: JsonObject): String {
         val action = args.get("action").asString
         val position = args.get("position").asString
-        val percent = args.get("percent")?.asInt
-        return "تم تنفيذ: شباك $position $action${percent?.let { " $it%" } ?: ""}"
+        val percent = args.intOrNull("percent")
+        val windows = when (position) {
+            "driver" -> listOf("fl")
+            "passenger" -> listOf("fr")
+            "rear_left" -> listOf("rl")
+            "rear_right" -> listOf("rr")
+            "all" -> listOf("fl", "fr", "rl", "rr")
+            else -> return "ما عرفتش أحدد الشباك المطلوب."
+        }
+        when (action) {
+            "open" -> if (position == "all" && (percent == null || percent == 100)) vehicleController.openWindows()
+                else windows.forEach { vehicleController.setWindowPosition(it, percent ?: 100) }
+            "close" -> if (position == "all" && (percent == null || percent == 0)) vehicleController.closeWindows()
+                else windows.forEach { vehicleController.setWindowPosition(it, percent ?: 0) }
+            "vent" -> windows.forEach { vehicleController.setWindowPosition(it, percent ?: 15) }
+            else -> return "ما فهمتش حركة الشباك المطلوبة."
+        }
+        return "تمام، نفذت أمر الشباك $position."
     }
 
-    private fun executeSunroof(args: JsonObject): String {
+    private suspend fun executeSunroof(args: JsonObject): String {
         val action = args.get("action").asString
-        return "تم تنفيذ: سقف $action"
+        when (action) {
+            "open" -> vehicleController.openSunroof()
+            "close" -> vehicleController.closeSunroof()
+            "tilt" -> vehicleController.tiltSunroof()
+            "shade_open" -> vehicleController.openSunshade()
+            "shade_close" -> vehicleController.closeSunshade()
+            else -> return "ما فهمتش حركة السقف المطلوبة."
+        }
+        return "تمام، نفذت أمر السقف."
     }
 
-    private fun executeDoors(args: JsonObject): String {
+    private suspend fun executeDoors(args: JsonObject): String {
         val lock = args.get("lock").asBoolean
-        return "تم تنفيذ: أبواب ${if (lock) "قفل" else "فتح"}"
+        vehicleController.setDoorLocks(lock)
+        return if (lock) "تمام، قفلت الأبواب." else "تمام، فتحت قفل الأبواب."
     }
 
-    private fun executeSeat(args: JsonObject): String {
+    private suspend fun executeFrunk(args: JsonObject): String {
+        return when (args.get("action").asString) {
+            "open" -> {
+                vehicleController.openFrunk()
+                "تمام، فتحت الصندوق الأمامي."
+            }
+            "close" -> {
+                vehicleController.closeFrunk()
+                "تمام، أغلقت الصندوق الأمامي."
+            }
+            else -> "ما فهمتش أمر الصندوق الأمامي."
+        }
+    }
+
+    private suspend fun executeSeat(args: JsonObject): String {
         val pos = args.get("position").asString
         val feature = args.get("feature").asString
         val action = args.get("action").asString
-        val level = args.get("level")?.asInt
-        return "تم تنفيذ: كرسي $pos ${if (feature == "heat") "تدفئة" else "تهوية"} $action${level?.let { " مستوى $it" } ?: ""}"
+        val level = args.intOrNull("level") ?: 3
+        require(level in 1..5) { "مستوى المقعد لازم يكون من 1 إلى 5" }
+        val position = if (pos == "passenger") "passenger" else "driver"
+        val activeLevel = if (action == "off") 0 else level
+        when (feature) {
+            "heat" -> vehicleController.setSeatHeat(position, activeLevel)
+            "vent" -> vehicleController.setSeatVent(position, activeLevel)
+            else -> return "ما فهمتش إعداد المقعد المطلوب."
+        }
+        return "تمام، ${if (action == "off") "أوقفت" else "شغلت"} ${if (feature == "heat") "تدفئة" else "تهوية"} كرسي ${if (position == "driver") "السائق" else "الراكب"}."
     }
 
-    private fun executeSteering(args: JsonObject): String {
+    private suspend fun executeSteering(args: JsonObject): String {
         val on = args.get("on").asBoolean
-        return "تم تنفيذ: دركسيون ${if (on) "تدفئة شغّالة" else "تدفئة طافية"}"
+        vehicleController.setSteeringHeat(on)
+        return if (on) "تمام، شغلت تدفئة المقود." else "تمام، أوقفت تدفئة المقود."
     }
 
-    private fun executeDriveMode(args: JsonObject): String {
+    private suspend fun executeDriveMode(args: JsonObject): String {
         val mode = args.get("mode").asString
-        return "تم تنفيذ: وضع قيادة $mode"
+        require(mode in setOf("ECO", "SPORT", "NORMAL", "SNOW", "SAND", "MUD", "MOUNTAIN", "SMART")) { "وضع القيادة غير مدعوم" }
+        vehicleController.setDriveMode(mode)
+        return "تمام، غيرت وضع القيادة إلى $mode."
     }
 
-    private fun executeTelemetry(args: JsonObject): String {
+    private suspend fun executeTelemetry(args: JsonObject): String {
         val query = args.get("query").asString
-        return "استعلام: $query - (البيانات الفعلية تحتاج تنفيذ)"
+        val data = vehicleController.readTelemetry() ?: return "مش قادر أوصل لقراءات السيارة حالياً."
+        return when (query) {
+            "soc" -> "نسبة شحن البطارية ${data.soc}٪."
+            "speed" -> "سرعة السيارة ${data.speedKph} كم/س."
+            "power_kw" -> "قدرة المحرك الحالية ${data.powerKw} كيلوواط."
+            "soh" -> "صحة البطارية ${data.soh}٪."
+            "inside_temp" -> "درجة الحرارة داخل السيارة ${data.insideTemp} درجة."
+            "outside_temp" -> "درجة الحرارة خارج السيارة ${data.outsideTemp} درجة."
+            "climate_setpoint" -> data.climateSetpointC?.let { "درجة التكييف المضبوطة ${it} درجة." } ?: "درجة ضبط التكييف مش متاحة حالياً."
+            "battery_temp" -> "أعلى درجة حرارة للبطارية ${data.maxBatTemp} درجة."
+            "voltage_12v" -> "جهد البطارية 12 فولت ${data.voltage12v} فولت."
+            "range" -> "قراءة المدى المتبقية مش متاحة من بيانات السيارة الحالية."
+            "tpms" -> if (data.tirePressureKpa.isEmpty()) "قراءات ضغط الإطارات مش متاحة حالياً."
+                else data.tirePressureKpa.entries.joinToString("، ") { (name, value) -> "$name: ${value.toInt()} كيلوباسكال" } + "."
+            "charging" -> "حالة الشحن مش متاحة من بيانات السيارة الحالية."
+            else -> "مش لاقية القراءة المطلوبة في بيانات السيارة."
+        }
     }
+
+    private fun JsonObject.intOrNull(name: String): Int? = get(name)?.takeUnless { it.isJsonNull }?.asInt
+    private fun JsonObject.booleanOrNull(name: String): Boolean? = get(name)?.takeUnless { it.isJsonNull }?.asBoolean
 
     fun setApiKey(key: String) {
-        prefs.edit().putString("openrouter_key", key).apply()
+        if (key.isBlank()) prefs.edit().remove("openrouter_key").apply()
+        else prefs.edit().putString("openrouter_key", key.trim()).apply()
     }
 
-    fun hasApiKey(): Boolean = prefs.contains("openrouter_key")
+    fun hasApiKey(): Boolean = !prefs.getString("openrouter_key", "").isNullOrBlank()
 }

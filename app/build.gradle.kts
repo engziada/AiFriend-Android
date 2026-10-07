@@ -83,6 +83,7 @@ dependencies {
     // JSON parsing for FID catalog
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // sherpa-onnx for offline ASR/TTS (will add via AAR in libs/)
-    // implementation(files("libs/sherpa-onnx-android-x.x.x.aar"))
+    // Offline Arabic ASR/TTS. The native runtime is packaged for Android by Sherpa-ONNX.
+    implementation("com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8")
+    implementation("org.apache.commons:commons-compress:1.28.0")
 }

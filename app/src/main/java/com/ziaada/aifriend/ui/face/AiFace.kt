@@ -4,19 +4,22 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.unit.dp
 import com.ziaada.aifriend.domain.FaceState
 import kotlin.math.sin
 
@@ -25,11 +28,15 @@ fun AiFace(state: FaceState, modifier: Modifier = Modifier) {
     val infinite = rememberInfiniteTransition(label = "face")
     val blink by infinite.animateFloat(
         initialValue = 1f,
-        targetValue = 0.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(180, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = keyframes {
+            durationMillis = 4200
+            1f at 0
+            1f at 3700
+            0.08f at 3800 using FastOutSlowInEasing
+            1f at 3920 using FastOutSlowInEasing
+            1f at 4200
+        }),
         label = "blink",
     )
     val breathe by infinite.animateFloat(
@@ -52,20 +59,22 @@ fun AiFace(state: FaceState, modifier: Modifier = Modifier) {
     )
 
     Canvas(modifier) {
-        drawRect(
-            brush = Brush.verticalGradient(
-                listOf(Color(0xFF021733), Color(0xFF06366A), Color(0xFF03152C)),
-            ),
-        )
-
-        val center = Offset(size.width / 2f, size.height / 2f - size.height * 0.02f)
-        val base = minOf(size.width, size.height) * 0.34f * breathe
+        val center = Offset(size.width / 2f, size.height * 0.49f)
+        val base = minOf(size.width * 0.28f, size.height * 0.56f) * breathe
         val radius = when (state) {
-            FaceState.SURPRISED -> base * 1.06f
-            FaceState.THINKING -> base * 0.99f
+            FaceState.SURPRISED -> base * 1.04f
+            FaceState.THINKING -> base * 0.98f
             else -> base
         }
 
+        val balloon = Rect(
+            left = -size.width * 0.18f,
+            top = -size.height * 0.28f,
+            right = size.width * 1.18f,
+            bottom = size.height * 1.28f,
+        )
+        drawBalloon(balloon, state, listeningPulse)
+        drawAura(center, radius, state, listeningPulse)
         drawFace(center, radius, state, listeningPulse)
 
         if (state == FaceState.LISTENING) {
@@ -82,29 +91,114 @@ fun AiFace(state: FaceState, modifier: Modifier = Modifier) {
             lookPhase = lookPhase,
             state = state,
         )
+        drawBrows(center, radius, state)
+        drawMouth(center, radius, state, listeningPulse)
     }
 }
 
-private fun DrawScope.drawFace(center: Offset, radius: Float, state: FaceState, pulse: Float) {
-    val highlight = when (state) {
-        FaceState.HAPPY -> 0xFF78E2FF
-        FaceState.SURPRISED -> 0xFF66D7FF
-        else -> 0xFF55D5FF
-    }
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(Color(highlight), Color(0xFF007FC0), Color(0xFF034A79)),
-            center = Offset(center.x - radius * 0.26f, center.y - radius * 0.32f),
-            radius = radius * 1.28f,
+private fun DrawScope.drawBalloon(bounds: Rect, state: FaceState, pulse: Float) {
+    val edge = if (state == FaceState.LISTENING) Color(0xFF77F1DF) else Color(0xFF7FDCEB)
+    drawOval(
+        brush = Brush.verticalGradient(
+            colors = listOf(Color(0xFF78DFD6), Color(0xFF388FB0), Color(0xFF194F78), Color(0xFF123B61)),
+            startY = bounds.top,
+            endY = bounds.bottom,
         ),
+        topLeft = Offset(bounds.left, bounds.top),
+        size = Size(bounds.width, bounds.height),
+    )
+    drawOval(
+        color = Color.White.copy(alpha = 0.075f),
+        topLeft = Offset(bounds.left + bounds.width * 0.09f, bounds.top + bounds.height * 0.08f),
+        size = Size(bounds.width * 0.72f, bounds.height * 0.78f),
+    )
+    drawOval(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.White.copy(alpha = 0.28f), Color.White.copy(alpha = 0f)),
+            center = Offset(bounds.left + bounds.width * 0.29f, bounds.top + bounds.height * 0.29f),
+            radius = bounds.width * 0.32f,
+        ),
+        topLeft = Offset(bounds.left, bounds.top),
+        size = Size(bounds.width, bounds.height),
+    )
+    drawOval(
+        color = edge.copy(alpha = if (state == FaceState.LISTENING) 0.23f * pulse else 0.14f),
+        topLeft = Offset(bounds.left + bounds.width * 0.015f, bounds.top + bounds.height * 0.018f),
+        size = Size(bounds.width * 0.97f, bounds.height * 0.96f),
+        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()),
+    )
+}
+
+private fun DrawScope.drawAura(center: Offset, radius: Float, state: FaceState, pulse: Float) {
+    val tint = if (state == FaceState.LISTENING) Color(0xFF59DCCB) else Color(0xFF63BFE1)
+    drawCircle(color = tint.copy(alpha = 0.035f), center = center, radius = radius * 1.38f * pulse)
+    drawCircle(
+        color = tint.copy(alpha = 0.16f),
         center = center,
-        radius = radius,
+        radius = radius * 1.11f,
+        style = androidx.compose.ui.graphics.drawscope.Stroke(width = radius * 0.012f),
+    )
+}
+
+private fun DrawScope.drawFace(center: Offset, radius: Float, state: FaceState, pulse: Float) {
+    val cheekTint = if (state == FaceState.HAPPY) Color(0xFFFFB5A7) else Color(0xFFFFAFA4)
+    drawCircle(
+        color = cheekTint.copy(alpha = 0.35f),
+        center = Offset(center.x - radius * 0.74f, center.y + radius * 0.40f),
+        radius = radius * 0.13f,
     )
     drawCircle(
-        color = Color.White.copy(alpha = 0.08f),
-        center = Offset(center.x - radius * 0.30f, center.y - radius * 0.38f),
-        radius = radius * 0.16f * pulse,
+        color = cheekTint.copy(alpha = 0.35f),
+        center = Offset(center.x + radius * 0.74f, center.y + radius * 0.40f),
+        radius = radius * 0.13f,
     )
+    drawCircle(
+        color = Color.White.copy(alpha = 0.22f * pulse),
+        center = Offset(center.x - radius * 0.72f, center.y - radius * 0.58f),
+        radius = radius * 0.065f,
+    )
+}
+
+private fun DrawScope.drawMouth(center: Offset, radius: Float, state: FaceState, pulse: Float) {
+    val mouthY = center.y + radius * 0.48f
+    if (state == FaceState.SPEAKING) {
+        val opening = 0.09f + pulse * 0.10f
+        drawOval(
+            color = Color(0xFF123D5B),
+            topLeft = Offset(center.x - radius * 0.17f, mouthY - radius * opening * 0.5f),
+            size = Size(radius * 0.34f, radius * opening),
+        )
+        drawOval(
+            color = Color(0xFFFF9D9A),
+            topLeft = Offset(center.x - radius * 0.09f, mouthY + radius * 0.01f),
+            size = Size(radius * 0.18f, radius * 0.055f),
+        )
+    } else {
+        val smile = Path().apply {
+            moveTo(center.x - radius * 0.28f, mouthY)
+            quadraticTo(center.x, mouthY + radius * 0.22f, center.x + radius * 0.28f, mouthY)
+        }
+        drawPath(
+            path = smile,
+            color = Color(0xFF123D5B),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = radius * 0.055f, cap = StrokeCap.Round),
+        )
+    }
+}
+
+private fun DrawScope.drawBrows(center: Offset, radius: Float, state: FaceState) {
+    val y = center.y - radius * 0.34f
+    val half = radius * 0.19f
+    val gap = radius * 0.23f
+    val color = Color(0xFF143D60).copy(alpha = 0.86f)
+    val browLift = when (state) {
+        FaceState.SURPRISED -> radius * 0.05f
+        FaceState.HAPPY -> -radius * 0.02f
+        FaceState.THINKING -> radius * 0.015f
+        else -> 0f
+    }
+    drawLine(color, Offset(center.x - gap - half, y), Offset(center.x - gap + half, y - browLift), radius * 0.035f, cap = StrokeCap.Round)
+    drawLine(color, Offset(center.x + gap - half, y - browLift), Offset(center.x + gap + half, y), radius * 0.035f, cap = StrokeCap.Round)
 }
 
 private fun DrawScope.drawListeningRings(center: Offset, radius: Float, pulse: Float) {
@@ -125,24 +219,25 @@ private fun DrawScope.drawEyes(
     state: FaceState,
 ) {
     val eyeOffsetX = radius * 0.43f
-    val eyeY = center.y - radius * 0.02f
-    val eyeWidth = radius * 0.34f
-    val eyeHeight = radius * 0.50f
+    val eyeY = center.y + radius * 0.01f
+    val eyeWidth = radius * 0.29f
+    val eyeHeight = radius * 0.38f
     val stateScale = when (state) {
-        FaceState.SURPRISED -> 1.18f
-        FaceState.THINKING -> 0.93f
+        FaceState.SURPRISED -> 1.12f
+        FaceState.THINKING -> 0.96f
+        FaceState.HAPPY -> 0.90f
         FaceState.SPEAKING -> 1.04f
         else -> 1f
     }
     val gazeX = when (state) {
-        FaceState.THINKING -> lookPhase * eyeWidth * 0.75f
-        FaceState.LISTENING -> sin(lookPhase * Math.PI.toFloat()) * eyeWidth * 0.85f
-        FaceState.HAPPY -> eyeWidth * 0.15f
-        else -> lookPhase * eyeWidth * 0.34f
+        FaceState.THINKING -> lookPhase * eyeWidth * 0.28f
+        FaceState.LISTENING -> sin(lookPhase * Math.PI.toFloat()) * eyeWidth * 0.28f
+        FaceState.HAPPY -> 0f
+        else -> lookPhase * eyeWidth * 0.12f
     }
     val gazeY = when (state) {
-        FaceState.THINKING -> -eyeHeight * 0.18f
-        FaceState.SURPRISED -> -eyeHeight * 0.05f
+        FaceState.THINKING -> -eyeHeight * 0.12f
+        FaceState.SURPRISED -> -eyeHeight * 0.02f
         else -> 0f
     }
 
@@ -161,13 +256,9 @@ private fun DrawScope.drawEye(
 ) {
     val w = eyeWidth * stateScale
     val h = eyeHeight * stateScale * blinkScale
-    drawOval(
-        color = Color.White,
-        topLeft = Offset(center.x - w, center.y - h),
-        size = Size(w * 2f, h * 2f),
-    )
+    drawOval(brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFDCECF4)), center.y - h, center.y + h), topLeft = Offset(center.x - w, center.y - h), size = Size(w * 2f, h * 2f))
     val pupil = center + Offset(gazeX, gazeY)
-    drawCircle(Color(0xFF0B2C52), radius = h * 0.48f, center = pupil)
-    drawCircle(Color(0xFF071A32), radius = h * 0.27f, center = pupil + Offset(0f, h * 0.05f))
-    drawCircle(Color.White, radius = h * 0.12f, center = pupil + Offset(-h * 0.13f, -h * 0.16f))
+    drawCircle(Color(0xFF0B2C52), radius = h * 0.42f, center = pupil)
+    drawCircle(Color(0xFF071A32), radius = h * 0.24f, center = pupil + Offset(0f, h * 0.05f))
+    drawCircle(Color.White, radius = h * 0.11f, center = pupil + Offset(-h * 0.12f, -h * 0.15f))
 }

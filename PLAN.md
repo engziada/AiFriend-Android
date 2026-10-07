@@ -39,15 +39,12 @@
 ### Phase 3: Offline Arabic Voice (`app/src/main/java/com/ziaada/aifriend/voice/`)
 | File | Purpose |
 |------|---------|
-| `ModelManager.kt` | Download/extract Moonshine-Arabic ASR (~290MB) + Piper Arabic TTS (~60MB) |
-| `SherpaAsrEngine.kt` | ASR wrapper (16kHz, VAD-segmented, partial/final callbacks) |
-| `SherpaTtsEngine.kt` | TTS wrapper (AudioTrack streaming, RMS for face animation) |
-| `VoiceManager.kt` | Orchestrates download → init → ASR/TTS lifecycle + UI state |
+| `ModelManager.kt` | Downloads and safely extracts the Moonshine Arabic ASR and Piper Arabic TTS model archives |
+| `SherpaAsrEngine.kt` | Captures microphone audio and transcribes each utterance with Sherpa-ONNX Moonshine v2 |
+| `SherpaTtsEngine.kt` | Synthesizes and plays Arabic speech with Sherpa-ONNX Piper VITS |
+| `VoiceManager.kt` | Coordinates model setup, ASR/TTS lifecycle, callbacks, and UI state |
 
-**Models needed** (not in repo):
-- ASR: `sherpa-onnx-moonshine-base-ar-quantized` (~290MB int8)
-- TTS: `vits-piper-ar_JO-kareem-medium` (~60MB)
-- Add sherpa-onnx AAR to `app/libs/` and uncomment implementation in `build.gradle.kts`
+The models are downloaded once into app-private storage. Speech processing uses the bundled Sherpa-ONNX Android runtime and requires no Google services framework.
 
 ### Phase 4: Assistant Router + LLM Fallback (`app/src/main/java/com/ziaada/aifriend/domain/`)
 | File | Purpose |
@@ -129,8 +126,6 @@ adb logcat -s FidCatalogManager:D AutoserviceClient:D BydConnectionManager:D Voi
 
 ## 📝 Notes for Resume
 
-- **sherpa-onnx AAR not included** — download from GitHub releases, place in `app/libs/`, uncomment in `build.gradle.kts`
-- **Model checksums** in `ModelManager.kt` are placeholders (`CHECKSUM_TO_BE_ADDED`) — update after download
 - **OpenRouter API key** stored in SharedPreferences (`llm_prefs` / `openrouter_key`) — enter via settings UI (to be built) or `adb shell`
 - **FID catalog** auto-cached per firmware fingerprint — delete `fid-catalog.json` in app files to force re-dump
 - **Debug keystore** in repo (`debug.keystore`, password `android`) — replace with release keystore for production

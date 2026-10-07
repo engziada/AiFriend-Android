@@ -8,6 +8,7 @@ class CommandRouter(
     private val context: Context,
     private val vehicleController: VehicleController,
     private val llmFallback: LlmFallback?,
+    private val appLauncher: AppLauncher,
 ) {
     private val strings = StringRes(context)
 
@@ -22,21 +23,30 @@ class CommandRouter(
     }
 
     private fun extractNumber(text: String): Int? {
-        val cleaned = text.replace(Regex("[^0-9٠-٩]"), "")
-            .replace('٠', '0').replace('١', '1').replace('٢', '2')
+        val cleaned = Regex("[0-9٠-٩]+").find(text)?.value ?: return null
+        return cleaned.replace('٠', '0').replace('١', '1').replace('٢', '2')
             .replace('٣', '3').replace('٤', '4').replace('٥', '5')
             .replace('٦', '6').replace('٧', '7').replace('٨', '8').replace('٩', '9')
-        return cleaned.toIntOrNull()
+            .toIntOrNull()
+    }
+
+    private fun extractNumberAfter(text: String, vararg markers: String): Int? {
+        val markerIndex = markers.map { text.indexOf(it) }.filter { it >= 0 }.minOrNull() ?: return null
+        return Regex("[0-9٠-٩]+").find(text.substring(markerIndex + 1))?.value
+            ?.replace('٠', '0')?.replace('١', '1')?.replace('٢', '2')
+            ?.replace('٣', '3')?.replace('٤', '4')?.replace('٥', '5')
+            ?.replace('٦', '6')?.replace('٧', '7')?.replace('٨', '8')?.replace('٩', '9')
+            ?.toIntOrNull()
     }
 
     private fun extractWindowPosition(text: String): String? {
         val positions = mapOf(
-            "السائق" to "fl", "سائق" to "fl", "يمين" to "fl",
-            "الراكب" to "fr", "راكب" to "fr", "يسار" to "fr", "الضيف" to "fr",
-            "الخلف" to "rl", "خلفي" to "rl", "يمين خلف" to "rl",
-            "اليسار خلف" to "rr", "يسار خلف" to "rr", "اليمين خلف" to "rr",
+            "يمين خلف" to "rr", "اليمين خلف" to "rr", "يسار خلف" to "rl", "اليسار خلف" to "rl",
+            "السائق" to "fl", "سائق" to "fl", "يسار" to "fl",
+            "الراكب" to "fr", "راكب" to "fr", "يمين" to "fr", "الضيف" to "fr",
+            "الخلف" to "rl", "خلفي" to "rl",
         )
-        return positions.entries.firstOrNull { text.contains(it.key) }?.value
+        return positions.entries.sortedByDescending { it.key.length }.firstOrNull { text.contains(it.key) }?.value
     }
 
     private fun extractSeatPosition(text: String): String? {
@@ -55,105 +65,136 @@ class CommandRouter(
         }
     }
 
-    suspend fun route(command: String): String {
+    suspend fun route(command: String, vehicleConnected: Boolean): String {
         val normalized = normalize(command)
 
         if (normalized.contains("ساعدني") || normalized.contains("مساعدة") || normalized.contains("الأوامر")) {
             return strings.get(StringRes.help_text)
         }
 
-        if (normalized.contains("مكيف") || normalized.contains("التكييف") || normalized.contains("كليمت") || normalized.contains("تبريد")) {
-            return routeClimate(normalized)
-        }
-        if (normalized.contains("شباك") || normalized.contains("شبابيك") || normalized.contains("نافذة") || normalized.contains("زجاج")) {
-            return routeWindows(normalized)
-        }
-        if (normalized.contains("سقف") || normalized.contains("فتحة سقف") || normalized.contains("ستارة سقف")) {
-            return routeSunroof(normalized)
-        }
-        if (normalized.contains("باب") || normalized.contains("أبواب") || normalized.contains("قفل") || normalized.contains("فتح أبواب") || normalized.contains("اقفال")) {
-            return routeDoors(normalized)
-        }
-        if (normalized.contains("كرسي") || normalized.contains("مقعد") || normalized.contains("تدفئة") || normalized.contains("تهوية كرسي")) {
-            return routeSeats(normalized)
-        }
-        if (normalized.contains("دركسيون") || normalized.contains("المقود") || normalized.contains("ستيرينج")) {
-            return routeSteering(normalized)
-        }
-        if (normalized.contains("وضع قيادة") || normalized.contains("قيادة") && (normalized.contains("اقتصادي") || normalized.contains("رياضي") || normalized.contains("ثلج") || normalized.contains("رمل") || normalized.contains("طين") || normalized.contains("جبل") || normalized.contains("ذكي") || normalized.contains("عادي"))) {
-            return routeDriveMode(normalized)
-        }
-        if (normalized.contains("كم") || normalized.contains("كام") || normalized.contains("في المية") || normalized.contains("النسبة") || normalized.contains("المدى") || normalized.contains("المسافة") || normalized.contains("حرارة") || normalized.contains("ضغط") || normalized.contains("شحن")) {
-            return routeTelemetry(normalized)
-        }
-        if (normalized.contains("شنطة") && (normalized.contains("أمامية") || normalized.contains("قدامي"))) {
-            return routeFrunk(normalized)
+        extractAppRequest(normalized)?.let { return appLauncher.launch(it).message }
+
+        if (!vehicleConnected && isVehicleTelemetryRequest(normalized)) {
+            return "مش قادر أقرأ بيانات السيارة الحية دلوقتي لأن السيارة مش متصلة."
         }
 
-        return llmFallback?.query(normalized) ?: strings.get(StringRes.command_not_understood)
+        val informationQuestion = isInformationQuestion(normalized)
+        if (!vehicleConnected && !informationQuestion && isVehicleSettingIntent(normalized)) {
+            return "أنا آدم، بس السيارة مش متصلة بخدمة التحكم دلوقتي. أقدر أجاوبك على سؤال عام أو أفتح تطبيق لحد ما الاتصال يرجع."
+        }
+
+        val localCommand = if (informationQuestion) null else when {
+            hasAny(normalized, "مكيف", "التكييف", "كليمت", "تبريد") -> routeClimate(normalized)
+            hasAny(normalized, "شباك", "شبابيك", "نافذة", "زجاج") -> routeWindows(normalized)
+            hasAny(normalized, "سقف", "فتحة سقف", "ستارة سقف") -> routeSunroof(normalized)
+            hasAny(normalized, "باب", "أبواب", "قفل", "اقفال") -> routeDoors(normalized)
+            hasAny(normalized, "كرسي", "مقعد", "تدفئة", "تهوية كرسي") -> routeSeats(normalized)
+            hasAny(normalized, "دركسيون", "المقود", "ستيرينج") -> routeSteering(normalized)
+            normalized.contains("وضع قيادة") || normalized.contains("قيادة") && hasAny(normalized, "اقتصادي", "رياضي", "ثلج", "رمل", "طين", "جبل", "ذكي", "عادي") -> routeDriveMode(normalized)
+            hasAny(normalized, "شنطة أمامية", "شنطة قدامي", "شنطة أمام") -> routeFrunk(normalized)
+            isVehicleTelemetryRequest(normalized) -> routeTelemetry(normalized)
+            else -> null
+        }
+
+        if (localCommand != null && localCommand != strings.get(StringRes.command_not_understood)) return localCommand
+
+        return llmFallback?.query(normalized, vehicleConnected) ?: strings.get(StringRes.command_not_understood)
     }
 
+    private fun extractAppRequest(text: String): String? {
+        val match = Regex("^(?:افتح(?:ي|لي)?|شغل(?:ي|لي)?|launch|open|start)\\s+(?:(?:تطبيق|البرنامج|برنامج|app|application)\\s+)?(.+?)[.!؟?]*$")
+            .matchEntire(text) ?: return null
+        val app = match.groupValues[1].trim().removePrefix("ال").replace(Regex("^(?:the|a)\\s+"), "")
+        if (app.isBlank() || hasAny(
+                app, "باب", "أبواب", "شباك", "شبابيك", "نافذة", "زجاج", "مكيف", "التكييف", "سقف", "فتحة سقف", "شنطة", "العربية", "السيارة",
+                "window", "windows", "door", "doors", "sunroof", "climate", "trunk", "frunk", "car", "vehicle",
+            )
+        ) {
+            return null
+        }
+        return app
+    }
+
+    private fun isVehicleActionIntent(text: String): Boolean {
+        val hasCarTarget = hasAny(
+            text, "مكيف", "التكييف", "شباك", "شبابيك", "نافذة", "زجاج", "سقف", "باب", "أبواب",
+            "كرسي", "مقعد", "دركسيون", "المقود", "الشنطة", "شنطة", "وضع قيادة", "السيارة",
+            "window", "windows", "door", "doors", "sunroof", "climate", " air con", "trunk", "frunk", "vehicle",
+        )
+        val hasAction = hasAny(
+            text, "افتح", "شغل", "تشغيل", "اطفي", "طفي", "اقفل", "قفل", "اغلق", "أغلق", "اضبط",
+            "خلي", "ظبط", "ارفع", "نزل", "سخن", "برد", "زود", "قلل", "غير", "اختار", "set", "turn on", "turn off",
+        )
+        return hasCarTarget && hasAction
+    }
+
+    private fun isVehicleTelemetryRequest(text: String): Boolean =
+        hasAny(text, "بطارية", "شحن", "soc", "مدى السيارة", "نسبة الشحن", "ضغط الكاوتش", "ضغط الإطارات") ||
+            hasAny(text, "كم", "كام", "النسبة", "المدى", "حرارة", "ضغط") &&
+            hasAny(text, "السيارة", "بطارية", "الكابينة", "الداخل", "الخارج", "الكفر", "الإطارات")
+
+    private fun isVehicleSettingIntent(text: String): Boolean {
+        if (hasAny(text, "وضع القيادة", "وضع قيادة") && hasAny(text, "اقتصادي", "اقتصاد", "ايكو", "رياضي", "سبورت", "عادي", "ثلج", "رمل", "طين", "جبل", "ذكي", "سمارت")) {
+            return true
+        }
+        val hasTarget = hasAny(
+            text, "مكيف", "التكييف", "تبريد", "شباك", "شبابيك", "نافذة", "زجاج", "سقف", "ستارة",
+            "باب", "أبواب", "قفل", "كرسي", "مقعد", "تدفئة", "تهوية", "مروحة", "هواء", "تدوير",
+            "ضباب", "دركسيون", "المقود", "شنطة", "السيارة", "window", "door", "climate", "sunroof", "trunk",
+        )
+        return hasTarget && (isVehicleActionIntent(text) || extractNumber(text) != null)
+    }
+
+    private fun isInformationQuestion(text: String): Boolean = hasAny(
+        text, "ازاي", "إزاي", "كيف", "ليه", "لماذا", "هل", "ايه", "إيه", "ما هو", "ما هي", "اشرح",
+        "what ", "why ", "how ", "where ", "when ", "is ", "can you", "can i", "tell me", "explain",
+    )
+
+    private fun hasAny(text: String, vararg values: String): Boolean = values.any(text::contains)
+
     private suspend fun routeClimate(text: String): String {
-        val temp = extractNumber(text)
+        val temp = extractNumberAfter(text, "درجة", "حرارة", "على") ?: extractNumber(text)
+        val isAuto = hasAny(text, "أوتوماتيك", "أوتو", "تلقائي")
+        val turnOn = hasAny(text, "شغ", "تشغيل", "فتّح", "افتح")
+        val turnOff = hasAny(text, "طفي", "أطفئ", "قفل", "أوقف")
+        var changed = false
 
-        if (text.contains("شغ") || text.contains("تشغيل") || text.contains("فتّح") || text.contains("افتح")) {
-            vehicleController.setClimatePower(true)
-            if (temp != null) {
-                vehicleController.setClimateTemperature(temp)
-                return strings.get(StringRes.climate_temp_set, temp)
-            }
-            return strings.get(StringRes.climate_on)
+        if (isAuto && (turnOn || turnOff || hasAny(text, "أوتو", "تلقائي"))) {
+            vehicleController.setClimateAuto(!turnOff)
+            changed = true
+        } else if (turnOn || turnOff) {
+            vehicleController.setClimatePower(turnOn)
+            changed = true
         }
-        if (text.contains("طفي") || text.contains("أطفئ") || text.contains("قفل") || text.contains("أوقف")) {
-            vehicleController.setClimatePower(false)
-            return strings.get(StringRes.climate_off)
-        }
-
-        if (text.contains("أوتوماتيك") || text.contains("أوتو") || text.contains("تلقائي")) {
-            if (text.contains("طفي") || text.contains("أطفئ") || text.contains("إلغاء")) {
-                vehicleController.setClimateAuto(false)
-                return "طفيت وضع أوتوماتيك"
-            }
-            vehicleController.setClimateAuto(true)
-            return strings.get(StringRes.climate_auto_on)
-        }
-
         if (temp != null && temp in 16..30) {
             vehicleController.setClimateTemperature(temp)
-            return strings.get(StringRes.climate_temp_set, temp)
+            changed = true
         }
-
-        if (text.contains("مروحة") || text.contains("سرعة") || text.contains("هواء")) {
-            val fanTemp = extractNumber(text)
-            if (fanTemp != null && fanTemp in 1..7) {
-                vehicleController.setClimateFanLevel(fanTemp)
-                return strings.get(StringRes.climate_fan_set, fanTemp)
-            }
+        val fanLevel = if (hasAny(text, "مروحة", "سرعة", "هواء")) {
+            extractNumberAfter(text, "مروحة", "سرعة", "هواء") ?: temp
+        } else null
+        if (fanLevel != null && fanLevel in 1..7) {
+            vehicleController.setClimateFanLevel(fanLevel)
+            changed = true
         }
-
-        if (text.contains("تدوير") || text.contains("داخلي") || text.contains("دورة")) {
-            if (text.contains("شغ") || text.contains("نعم") || text.contains("داخلي")) {
-                vehicleController.setRecirculation(true)
-                return strings.get(StringRes.climate_recirc_on)
-            }
-            if (text.contains("طفي") || text.contains("خارجي")) {
-                vehicleController.setRecirculation(false)
-                return strings.get(StringRes.climate_recirc_off)
-            }
+        if (hasAny(text, "تدوير", "داخلي", "دورة") && (turnOn || turnOff || hasAny(text, "داخلي", "خارجي"))) {
+            vehicleController.setRecirculation(!hasAny(text, "خارجي") && !turnOff)
+            changed = true
         }
-
-        if (text.contains("ضباب") || text.contains("تجمد") || text.contains("ازالة")) {
-            if (text.contains("شغ") || text.contains("نعم")) {
-                vehicleController.setRearDefrost(true)
-                return strings.get(StringRes.climate_defrost_on)
-            }
-            if (text.contains("طفي")) {
-                vehicleController.setRearDefrost(false)
-                return strings.get(StringRes.climate_defrost_off)
-            }
+        if (hasAny(text, "ضباب", "تجمد", "ازالة") && (turnOn || turnOff)) {
+            vehicleController.setRearDefrost(turnOn)
+            changed = true
         }
+        if (!changed) return strings.get(StringRes.command_not_understood)
 
-        return strings.get(StringRes.command_not_understood)
+        val response = mutableListOf<String>()
+        if (isAuto) response += if (turnOff) "أوقفت الوضع التلقائي" else "فعلت الوضع التلقائي"
+        else if (turnOn || turnOff) response += if (turnOn) "شغلت التكييف" else "طفيت التكييف"
+        if (temp != null && temp in 16..30 && fanLevel == null) response += "ضبطت الحرارة على $temp درجة"
+        if (fanLevel != null && fanLevel in 1..7) response += "ضبطت المروحة على المستوى $fanLevel"
+        if (text.contains("تدوير")) response += if (turnOff || text.contains("خارجي")) "أوقفت التدوير الداخلي" else "فعلت التدوير الداخلي"
+        if (hasAny(text, "ضباب", "تجمد", "ازالة")) response += if (turnOff) "أوقفت إزالة الضباب" else "فعلت إزالة الضباب"
+        return response.joinToString("، ") + "."
     }
 
     private suspend fun routeWindows(text: String): String {
@@ -161,16 +202,21 @@ class CommandRouter(
         val target = pos ?: "all"
 
         if (text.contains("افتح") || text.contains("شغ") || text.contains("انزل") || text.contains("فك")) {
+            val requestedPercent = extractNumber(text)?.takeIf { it in 0..100 }
             if (text.contains("تهوية") || text.contains("نص") || text.contains("نصف")) {
                 if (target == "all") {
-                    return strings.get(StringRes.windows_all_open)
+                    listOf("fl", "fr", "rl", "rr").forEach { vehicleController.setWindowPosition(it, 15) }
+                    return "فتحت الشبابيك فتحة تهوية بسيطة"
                 }
+                vehicleController.setWindowPosition(target, 15)
                 return strings.get(StringRes.window_vent, target)
             }
             if (target == "all") {
-                vehicleController.openWindows()
+                if (requestedPercent == null || requestedPercent == 100) vehicleController.openWindows()
+                else listOf("fl", "fr", "rl", "rr").forEach { vehicleController.setWindowPosition(it, requestedPercent) }
                 return strings.get(StringRes.windows_all_open)
             }
+            vehicleController.setWindowPosition(target, requestedPercent ?: 100)
             return strings.get(StringRes.window_open, target)
         }
 
@@ -179,12 +225,14 @@ class CommandRouter(
                 vehicleController.closeWindows()
                 return strings.get(StringRes.windows_all_close)
             }
+            vehicleController.setWindowPosition(target, 0)
             return strings.get(StringRes.window_close, target)
         }
 
         val pct = extractNumber(text)
-        if (pct != null && pct in 0..100 && target != "all") {
-            vehicleController.setWindowPosition(target, pct)
+        if (pct != null && pct in 0..100) {
+            if (target == "all") listOf("fl", "fr", "rl", "rr").forEach { vehicleController.setWindowPosition(it, pct) }
+            else vehicleController.setWindowPosition(target, pct)
             return strings.get(StringRes.window_pos_set, target, pct)
         }
 
@@ -204,7 +252,9 @@ class CommandRouter(
             return strings.get(StringRes.command_not_understood)
         }
 
-        if (text.contains("ميل") || text.contains("تهوية") || text.contains("نص")) {
+        if ((text.contains("ميل") || text.contains("تهوية") || text.contains("نص")) &&
+            hasAny(text, "ميل", "افتح", "شغ", "ارفع", "خلي")
+        ) {
             vehicleController.tiltSunroof()
             return strings.get(StringRes.sunroof_tilt)
         }
@@ -317,36 +367,38 @@ class CommandRouter(
         val telemetry = vehicleController.readTelemetry()
             ?: return strings.get(StringRes.command_not_understood)
 
-        if (text.contains("كم") || text.contains("كام") || text.contains("في المية") || text.contains("النسبة") || text.contains("بطارية")) {
-            return strings.get(StringRes.telemetry_soc, telemetry.soc)
+        if (hasAny(text, "مدى", "المسافة", "range")) {
+            return "قراءة المدى المتبقي مش متاحة من بيانات السيارة الحالية."
         }
-        if (text.contains("المدى") || text.contains("المسافة") || text.contains("كم كيلو")) {
-            val estRange = (telemetry.soc * 0.5).toInt()
-            return strings.get(StringRes.telemetry_range, estRange)
+        if (hasAny(text, "سرعة", "ماشي", "speed")) {
+            return "سرعة السيارة ${telemetry.speedKph} كم/س."
         }
-
-        if (text.contains("حرارة") || text.contains("درجة") || text.contains("داخل") || text.contains("خارج")) {
-            if (text.contains("خارج") || text.contains("الخارج")) {
-                return strings.get(StringRes.telemetry_outside_temp, telemetry.outsideTemp)
-            }
-            if (text.contains("بطارية") || text.contains("بطارية")) {
-                return strings.get(StringRes.telemetry_battery_temp, telemetry.maxBatTemp)
-            }
+        if (hasAny(text, "قوة", "قدرة", "power")) {
+            return "قدرة المحرك الحالية ${telemetry.powerKw} كيلوواط."
+        }
+        if (hasAny(text, "صحة البطارية", "soh")) {
+            return "صحة البطارية ${telemetry.soh}٪."
+        }
+        if (hasAny(text, "حرارة البطارية", "حرارة البطاريه")) {
+            return strings.get(StringRes.telemetry_battery_temp, telemetry.maxBatTemp)
+        }
+        if (hasAny(text, "خارج", "الخارج", "outside")) {
+            return strings.get(StringRes.telemetry_outside_temp, telemetry.outsideTemp)
+        }
+        if (hasAny(text, "حرارة", "درجة", "داخل", "الكابينة", "inside")) {
+            telemetry.climateSetpointC?.let { return "درجة التكييف المضبوطة $it درجة." }
             return strings.get(StringRes.telemetry_inside_temp, telemetry.insideTemp)
         }
-
-        if (text.contains("12") || text.contains("فولت") || text.contains("بطارية صغيرة")) {
+        if (hasAny(text, "12", "فولت", "بطارية صغيرة")) {
             return strings.get(StringRes.telemetry_12v, telemetry.voltage12v)
         }
-
-        if (text.contains("ضغط") || text.contains("إطارات") || text.contains("كفر")) {
-            return "ضغط الإطارات: غير متاح حالياً"
+        if (hasAny(text, "ضغط", "إطارات", "كفر", "كاوتش", "tpms")) {
+            if (telemetry.tirePressureKpa.isEmpty()) return "قراءات ضغط الإطارات مش متاحة حالياً."
+            return telemetry.tirePressureKpa.entries.joinToString("، ") { (name, value) -> "$name: ${value.toInt()} كيلوباسكال" } + "."
         }
-
-        if (text.contains("شحن") || text.contains("تشحن")) {
-            return "جارٍ الشحن: غير متاح حالياً"
+        if (hasAny(text, "بطارية", "شحن", "soc", "نسبة")) {
+            return strings.get(StringRes.telemetry_soc, telemetry.soc)
         }
-
         return strings.get(StringRes.command_not_understood)
     }
 }
