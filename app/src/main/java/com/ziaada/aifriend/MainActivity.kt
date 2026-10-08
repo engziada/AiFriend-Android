@@ -54,7 +54,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.ziaada.aifriend.domain.CaptionSpeaker
 import com.ziaada.aifriend.ui.MainViewModel
 import com.ziaada.aifriend.ui.face.AiFace
 import com.ziaada.aifriend.ui.theme.AiFriendTheme
@@ -62,9 +61,11 @@ import com.ziaada.aifriend.voice.VoiceManager
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
+
     private val requestAudio = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.beginListening()
     }
+
     private lateinit var insetsController: WindowInsetsControllerCompat
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,6 +75,7 @@ class MainActivity : ComponentActivity() {
         insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         hideSystemBars()
+
         setContent {
             AiFriendTheme {
                 AiFriendScreen(viewModel = vm, onMic = ::toggleListening)
@@ -103,7 +105,7 @@ class MainActivity : ComponentActivity() {
 private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
-    val voiceError by viewModel.voiceError.collectAsStateWithLifecycle()
+    val voiceDownloadProgress by viewModel.voiceDownloadProgress.collectAsStateWithLifecycle()
     val hasOpenRouterKey by viewModel.hasOpenRouterKey.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
@@ -134,14 +136,15 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit) {
                     verticalArrangement = Arrangement.SpaceBetween,
                 ) {
                     ListenButton(
-                        state = voiceState,
+                        voiceState = voiceState,
                         listening = state.isListening,
                         buttonSize = buttonSize,
                         onClick = onMic,
                     )
-                    CaptionBar(
-                        speaker = if (voiceError != null) null else state.captionSpeaker,
-                        text = voiceError ?: state.caption,
+                    StatusBar(
+                        state = state,
+                        voiceState = voiceState,
+                        voiceDownloadProgress = voiceDownloadProgress,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 80.dp, max = 104.dp),
@@ -213,17 +216,17 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit) {
 
 @Composable
 private fun ListenButton(
-    state: VoiceManager.VoiceState,
+    voiceState: VoiceManager.VoiceState,
     listening: Boolean,
     buttonSize: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
 ) {
-    val enabled = state in setOf(
+    val enabled = voiceState in setOf(
         VoiceManager.VoiceState.READY,
         VoiceManager.VoiceState.ERROR,
         VoiceManager.VoiceState.LISTENING,
     )
-    val label = when (state) {
+    val label = when (voiceState) {
         VoiceManager.VoiceState.DOWNLOADING_MODELS -> "تحميل الصوت"
         VoiceManager.VoiceState.INITIALIZING -> "جاري التجهيز"
         VoiceManager.VoiceState.LISTENING -> "إيقاف الاستماع"
@@ -261,31 +264,33 @@ private fun ListenButton(
 }
 
 @Composable
-private fun CaptionBar(speaker: CaptionSpeaker?, text: String, modifier: Modifier = Modifier) {
+private fun StatusBar(
+    state: com.ziaada.aifriend.domain.AiFriendUiState,
+    voiceState: VoiceManager.VoiceState,
+    voiceDownloadProgress: VoiceManager.DownloadProgress,
+    modifier: Modifier = Modifier,
+) {
+    val voiceLabel = when (voiceState) {
+        VoiceManager.VoiceState.DOWNLOADING_MODELS -> "جاري تحميل نماذج الصوت... ${if (voiceDownloadProgress.total > 0) "${(voiceDownloadProgress.current * 100 / voiceDownloadProgress.total)}%" else ""}"
+        VoiceManager.VoiceState.INITIALIZING -> "تهيئة المحرك الصوتي..."
+        VoiceManager.VoiceState.ERROR -> "خطأ في الصوت: ${state.vehicleMessage}"
+        else -> state.vehicleMessage
+    }
+
     Surface(
-        modifier = modifier,
-        color = Color(0xFF132A3A),
-        contentColor = Color.White,
+        modifier = modifier
+            .background(Color(0xFF132A3A)),
         shape = RoundedCornerShape(26.dp),
-        shadowElevation = 10.dp,
+        contentColor = Color.White,
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 26.dp, vertical = 14.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 26.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = when (speaker) {
-                    CaptionSpeaker.YOU -> "أنت قلت"
-                    CaptionSpeaker.ASSISTANT -> "آدم قال"
-                    null -> "تنبيه صوتي"
-                },
-                color = if (speaker == CaptionSpeaker.YOU) Color(0xFF7CE4D7) else Color(0xFF9FCBE0),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = text,
-                modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+                text = voiceLabel,
                 color = Color(0xFFF3F8FA),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Medium,

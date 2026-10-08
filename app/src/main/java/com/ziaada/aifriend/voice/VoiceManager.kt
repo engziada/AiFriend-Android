@@ -1,119 +1,134 @@
 package com.ziaada.aifriend.voice
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Coordinates fully on-device Sherpa-ONNX Arabic speech recognition and speech output. */
-class VoiceManager(application: Application) {
-    private val modelManager = ModelManager(application)
-    private val asrEngine = SherpaAsrEngine()
-    private val ttsEngine = SherpaTtsEngine()
+class VoiceManager(application: Application) : AndroidViewModel(application) {
+    private val TAG = "VoiceManager"
+    private val modelManager = ModelManager(getApplication())
+    private var asrEngine: SherpaAsrEngine? = null
+    private var ttsEngine: SherpaTtsEngine? = null
 
-    private val _state = MutableStateFlow(VoiceState.IDLE)
+    private val _state = MutableStateFlow<VoiceState>(VoiceState.UNINITIALIZED)
     val state = _state.asStateFlow()
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage = _errorMessage.asStateFlow()
-    private val _downloadProgress = MutableStateFlow(DownloadProgress(0, 0, ""))
+
+    private val _downloadProgress = MutableStateFlow<DownloadProgress>(DownloadProgress(0, 0, ""))
     val downloadProgress = _downloadProgress.asStateFlow()
 
-    enum class VoiceState { IDLE, DOWNLOADING_MODELS, INITIALIZING, READY, LISTENING, PROCESSING, SPEAKING, ERROR }
-    data class DownloadProgress(val current: Int, val total: Int, val modelName: String)
-
-    private var initialized = false
-
-    suspend fun initialize(): Boolean {
-        if (initialized) return true
-        _errorMessage.value = null
-        _state.value = VoiceState.DOWNLOADING_MODELS
-        val modelsReady = modelManager.ensureModelsDownloaded { name, current, total ->
-            _downloadProgress.value = DownloadProgress(current, total, name)
-        }
-        if (!modelsReady) return fail("تعذر تجهيز نماذج الصوت. تأكد من الاتصال بالإنترنت وأعد المحاولة")
-
-        _state.value = VoiceState.INITIALIZING
-        val asrReady = asrEngine.initialize(modelManager.getAsrModelPath())
-        val ttsReady = ttsEngine.initialize(modelManager.getTtsModelPath())
-        if (!asrReady || !ttsReady) return fail("تعذر تشغيل محرك الصوت على هذا الجهاز")
-
-        asrEngine.setListener(object : SherpaAsrEngine.Listener {
-            override fun onPartial(text: String) { partialResult?.invoke(text) }
-            override fun onFinal(text: String) {
-                _state.value = VoiceState.PROCESSING
-                if (text.isBlank()) {
-                    _errorMessage.value = "ملحقتش أسمع كلام واضح، جرّب تاني"
-                    _state.value = VoiceState.READY
-                    finalResult?.invoke("")
-                } else {
-                    finalResult?.invoke(text)
-                }
-            }
-            override fun onError(message: String) {
-                Log.e(TAG, message)
-                _errorMessage.value = "حصلت مشكلة في تسجيل الصوت، جرّب تاني"
-                _state.value = VoiceState.READY
-                finalResult?.invoke("")
-            }
-        })
-        ttsEngine.setListener(object : SherpaTtsEngine.Listener {
-            override fun onStart() { _state.value = VoiceState.SPEAKING }
-            override fun onProgress(progress: Float) { }
-            override fun onComplete() { _state.value = VoiceState.READY }
-            override fun onError(message: String) {
-                Log.e(TAG, message)
-                _errorMessage.value = "تعذر تشغيل الرد الصوتي"
-                _state.value = VoiceState.READY
-            }
-        })
-        initialized = true
-        _state.value = VoiceState.READY
-        return true
+    enum class VoiceState {
+        UNINITIALIZED,
+        DOWNLOADING_MODELS,
+        INITIALIZING,
+        READY,
+        LISTENING,
+        PROCESSING,
+        SPEAKING,
+        ERROR,
     }
 
-    private var partialResult: ((String) -> Unit)? = null
-    private var finalResult: ((String) -> Unit)? = null
+    data class DownloadProgress(
+        val current: Int,
+        val total: Int,
+        val modelName: String,
+    )
 
-    fun startListening(onPartial: (String) -> Unit, onFinal: (String) -> Unit): Boolean {
-        if (!initialized || _state.value == VoiceState.LISTENING) return false
-        partialResult = onPartial
-        finalResult = onFinal
-        _errorMessage.value = null
-        return asrEngine.startListening().also { started ->
-            if (started) _state.value = VoiceState.LISTENING
-            else {
-                _errorMessage.value = "تعذر فتح الميكروفون، تأكد من إذن التسجيل"
+    init {
+        Log.d(TAG, "VoiceManager created")
+    }
+
+    suspend fun initialize(): Boolean {
+        return withContext(Dispatchers.IO) {
+            val paths = modelManager.getModelPathsOrNull()
+            if (paths == null) {
+                val status = modelManager.checkModels()
+                val missing = status.missingDescription()
+                Log.w(TAG, "Models not ready: $missing")
+                _state.value = VoiceState.ERROR
+                return@withContext false
+            }
+
+            // Smart cast doesn't work across lambda boundary, use local variables
+            val asrDir: java.io.File = paths.asrDir
+            val ttsDir: java.io.File = paths.ttsDir
+            val vadFile: java.io.File = paths.vadFile
+
+            _state.value = VoiceState.INITIALIZING
+
+            // Initialize ASR
+            asrEngine = SherpaAsrEngine(getApplication(), asrDir, vadFile)
+            val asrOk = asrEngine!!.initialize()
+
+            // Initialize TTS
+            ttsEngine = SherpaTtsEngine(getApplication(), ttsDir)
+            val ttsOk = ttsEngine!!.initialize()
+
+            if (asrOk && ttsOk) {
                 _state.value = VoiceState.READY
+                return@withContext true
+            } else {
+                _state.value = VoiceState.ERROR
+                return@withContext false
             }
         }
+    }
+
+    fun startListening(onPartial: (String) -> Unit, onFinal: (String) -> Unit) {
+        val currentState = state.value
+        if (currentState != VoiceState.READY) {
+            Log.w(TAG, "Cannot start listening: voice not ready (state=$currentState)")
+            return
+        }
+        _state.value = VoiceState.LISTENING
+
+        asrEngine?.setListener(object : SherpaAsrEngine.Listener {
+            override fun onPartial(text: String) = onPartial(text)
+            override fun onFinal(text: String) = onFinal(text)
+            override fun onError(message: String) {
+                _state.value = VoiceState.ERROR
+            }
+            override fun onStateChange(state: SherpaAsrEngine.AsrState) {
+                // State changes handled by ASR engine's flow
+            }
+        })
+
+        asrEngine?.startListening()
     }
 
     fun stopListening() {
-        if (_state.value == VoiceState.LISTENING) {
-            _state.value = VoiceState.PROCESSING
-            asrEngine.stopListening()
+        asrEngine?.stopListening()
+        if (state.value == VoiceState.LISTENING) {
+            _state.value = VoiceState.READY
         }
     }
 
     suspend fun speak(text: String): Boolean {
-        if (!initialized) return false
-        return ttsEngine.speak(text)
+        if (state.value == VoiceState.SPEAKING) return false
+        _state.value = VoiceState.SPEAKING
+        val result = ttsEngine?.speak(text) ?: false
+        if (state.value == VoiceState.SPEAKING) {
+            _state.value = VoiceState.READY
+        }
+        return result
     }
 
-    fun stopSpeaking() = ttsEngine.stop()
-
-    private fun fail(message: String): Boolean {
-        _errorMessage.value = message
-        _state.value = VoiceState.ERROR
-        return false
+    fun stopSpeaking() {
+        ttsEngine?.stop()
+        if (state.value == VoiceState.SPEAKING) {
+            _state.value = VoiceState.READY
+        }
     }
 
-    fun shutdown() {
-        asrEngine.shutdown()
-        ttsEngine.shutdown()
+    override fun onCleared() {
+        asrEngine?.shutdown()
+        ttsEngine?.shutdown()
+        super.onCleared()
     }
-
-    companion object { private const val TAG = "VoiceManager" }
 }

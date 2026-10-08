@@ -1,5 +1,6 @@
 package com.ziaada.aifriend.voice
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -10,147 +11,164 @@ import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import com.k2fsa.sherpa.onnx.GeneratedAudio
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 
-/** Offline Arabic Piper VITS speech synthesis using Sherpa-ONNX. */
-class SherpaTtsEngine {
-    @Volatile private var tts: OfflineTts? = null
-    @Volatile private var audioTrack: AudioTrack? = null
-    @Volatile private var isSpeaking = false
-    private var listener: Listener? = null
+class SherpaTtsEngine(
+    private val context: Context,
+    private val ttsDir: java.io.File,
+) {
+    private val TAG = "SherpaTtsEngine"
+    private var tts: OfflineTts? = null
+    private var audioTrack: AudioTrack? = null
+    private var isSpeaking = false
+    private var isInitialized = false
 
-    enum class TtsState { IDLE, INITIALIZING, READY, SPEAKING, ERROR }
+    enum class TtsState {
+        UNINITIALIZED,
+        INITIALIZING,
+        READY,
+        SPEAKING,
+        ERROR,
+    }
 
     interface Listener {
         fun onStart()
-        fun onProgress(progress: Float)
+        fun onProgress(progress: Float) // 0.0 to 1.0
         fun onComplete()
         fun onError(message: String)
+        fun onStateChange(state: TtsState)
     }
 
+    private var listener: Listener? = null
     fun setListener(listener: Listener) { this.listener = listener }
 
-    suspend fun initialize(modelPath: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val root = File(modelPath)
-            val model = root.findFile("ar_JO-kareem-medium.onnx") ?: error("Arabic Piper model is missing")
-            val tokens = root.findFile("tokens.txt") ?: error("Piper tokens are missing")
-            val dataDir = root.findDirectory("espeak-ng-data") ?: error("eSpeak-ng data is missing")
-            val config = OfflineTtsConfig(
-                model = OfflineTtsModelConfig(
-                    vits = OfflineTtsVitsModelConfig(
-                        model = model.absolutePath,
-                        tokens = tokens.absolutePath,
-                        dataDir = dataDir.absolutePath,
-                    ),
-                    numThreads = 2,
-                    debug = false,
-                    provider = "cpu",
-                ),
-                maxNumSentences = 1,
-            )
-            tts = OfflineTts(config = config)
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize offline Arabic TTS", e)
-            listener?.onError("TTS initialization failed: ${e.message}")
-            false
+    suspend fun initialize(): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Piper TTS (VITS) model config
+                val vitsConfig = OfflineTtsVitsModelConfig(
+                    ttsDir.absolutePath + "/ar_JO-kareem-medium.onnx", // model
+                    ttsDir.absolutePath + "/tokens.txt",               // tokens
+                    ttsDir.absolutePath + "/espeak-ng-data",           // dataDir (espeak-ng-data directory)
+                    "", // lexicon - not needed for piper
+                    "", // dictDir - not needed
+                    0.667f, // noiseScale
+                    1.0f, // noiseScaleW
+                    1.0f, // lengthScale
+                )
+
+                val modelConfig = OfflineTtsModelConfig(
+                    vits = vitsConfig,
+                    matcha = com.k2fsa.sherpa.onnx.OfflineTtsMatchaModelConfig(""),
+                    kokoro = com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig(""),
+                    zipvoice = com.k2fsa.sherpa.onnx.OfflineTtsZipVoiceModelConfig(""),
+                    kitten = com.k2fsa.sherpa.onnx.OfflineTtsKittenModelConfig(""),
+                    pocket = com.k2fsa.sherpa.onnx.OfflineTtsPocketModelConfig(""),
+                    supertonic = com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig(""),
+                    1, // numThreads
+                    false, // debug
+                    "cpu", // provider
+                )
+
+                val ttsConfig = OfflineTtsConfig(
+                    model = modelConfig,
+                    ruleFsts = "",
+                    ruleFars = "",
+                    maxNumSentences = 1,
+                    silenceScale = 0.5f,
+                )
+
+                tts = OfflineTts(context.assets, ttsConfig)
+                isInitialized = true
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "TTS initialization failed", e)
+                listener?.onError("TTS init failed: ${e.message}")
+                false
+            }
         }
     }
 
     suspend fun speak(text: String): Boolean {
-        val engine = tts ?: return false
-        if (isSpeaking || text.isBlank()) return false
+        if (isSpeaking || !isInitialized || tts == null) return false
         isSpeaking = true
         listener?.onStart()
+
         return withContext(Dispatchers.IO) {
             try {
-                val audio = engine.generateWithConfig(
-                    text = text,
-                    config = GenerationConfig(sid = 0, speed = 1.0f, silenceScale = 0.2f),
+                val generatedAudio = tts!!.generate(text, 0, 1.0f) // speaker=0, speed=1.0
+                val samples = generatedAudio.samples
+                val sampleRate = generatedAudio.sampleRate
+
+                val minBufferSize = AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
                 )
-                if (audio.samples.isEmpty()) error("TTS produced no audio")
-                playSamples(audio.samples, audio.sampleRate)
+
+                audioTrack = AudioTrack(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                    AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build(),
+                    minBufferSize,
+                    AudioTrack.MODE_STREAM,
+                    AudioManager.AUDIO_SESSION_ID_GENERATE
+                )
+
+                audioTrack?.play()
+
+                val buffer = ShortArray(1024)
+                var written = 0
+                while (written < samples.size && isSpeaking) {
+                    val toWrite = minOf(buffer.size, samples.size - written)
+                    for (i in 0 until toWrite) {
+                        val sample = (samples[written + i] * 32767.0f).coerceIn(-32768f, 32767f).toInt().toShort()
+                        buffer[i] = sample
+                    }
+                    audioTrack?.write(buffer, 0, toWrite)
+                    written += toWrite
+                    val progress = written.toFloat() / samples.size
+                    listener?.onProgress(progress)
+                }
+
+                audioTrack?.stop()
+                audioTrack?.release()
+                audioTrack = null
                 listener?.onComplete()
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "Offline TTS playback failed", e)
-                listener?.onError("TTS playback failed: ${e.message}")
+                Log.e(TAG, "TTS speak failed", e)
+                listener?.onError("TTS speak failed: ${e.message}")
                 false
             } finally {
-                releaseAudioTrack()
                 isSpeaking = false
             }
         }
     }
 
-    private fun playSamples(samples: FloatArray, sampleRate: Int) {
-        val minBufferBytes = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        check(minBufferBytes > 0) { "AudioTrack returned invalid buffer size: $minBufferBytes" }
-        val track = AudioTrack(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build(),
-            AudioFormat.Builder()
-                .setSampleRate(sampleRate)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .build(),
-            maxOf(minBufferBytes, 4096),
-            AudioTrack.MODE_STREAM,
-            AudioManager.AUDIO_SESSION_ID_GENERATE,
-        )
-        check(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack did not initialize" }
-        audioTrack = track
-        track.play()
-
-        val shortBuffer = ShortArray(1024)
-        var offset = 0
-        while (offset < samples.size && isSpeaking) {
-            val count = minOf(shortBuffer.size, samples.size - offset)
-            for (index in 0 until count) {
-                shortBuffer[index] = (samples[offset + index] * 32767f).coerceIn(-32768f, 32767f).toInt().toShort()
-            }
-            var written = 0
-            while (written < count && isSpeaking) {
-                val result = track.write(shortBuffer, written, count - written, AudioTrack.WRITE_BLOCKING)
-                check(result > 0) { "AudioTrack write failed: $result" }
-                written += result
-            }
-            offset += count
-            listener?.onProgress(offset.toFloat() / samples.size)
-        }
-    }
-
     fun stop() {
         isSpeaking = false
-        releaseAudioTrack()
-    }
-
-    private fun releaseAudioTrack() {
-        val track = audioTrack ?: return
+        audioTrack?.stop()
+        audioTrack?.release()
         audioTrack = null
-        runCatching { if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop() }
-        track.release()
     }
 
     fun shutdown() {
         stop()
+        tts?.free()
         tts?.release()
         tts = null
+        isInitialized = false
     }
 
+    fun isReady(): Boolean = isInitialized
     fun isSpeaking(): Boolean = isSpeaking
-
-    private fun File.findFile(name: String): File? = walkTopDown().firstOrNull { it.isFile && it.name == name }
-    private fun File.findDirectory(name: String): File? = walkTopDown().firstOrNull { it.isDirectory && it.name == name }
-
-    companion object { private const val TAG = "SherpaTtsEngine" }
 }

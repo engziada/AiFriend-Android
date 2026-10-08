@@ -8,7 +8,6 @@ import com.ziaada.aifriend.byd.BydConnectionState
 import com.ziaada.aifriend.byd.BydVehicleController
 import com.ziaada.aifriend.domain.AiFriendStateStore
 import com.ziaada.aifriend.domain.AssistantEngine
-import com.ziaada.aifriend.domain.CaptionSpeaker
 import com.ziaada.aifriend.domain.FaceState
 import com.ziaada.aifriend.domain.VehicleController
 import com.ziaada.aifriend.voice.VoiceManager
@@ -29,7 +28,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val voiceManager = VoiceManager(getApplication())
     val voiceState = voiceManager.state
     val voiceDownloadProgress = voiceManager.downloadProgress
-    val voiceError = voiceManager.errorMessage
     private val _hasOpenRouterKey = MutableStateFlow(assistant.hasLlmKey())
     val hasOpenRouterKey = _hasOpenRouterKey.asStateFlow()
     private var climateEnabled = false
@@ -67,28 +65,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun beginListening() {
-        if (voiceManager.state.value == VoiceManager.VoiceState.ERROR || voiceManager.state.value == VoiceManager.VoiceState.IDLE) {
+        val voiceState = voiceManager.state.value
+        if (voiceState == VoiceManager.VoiceState.ERROR || voiceState == VoiceManager.VoiceState.UNINITIALIZED) {
             viewModelScope.launch {
                 if (voiceManager.initialize()) beginListening()
             }
             return
         }
-        val started = voiceManager.startListening(
+        voiceManager.startListening(
             onPartial = { text -> updatePartial(text) },
             onFinal = { text -> finishListening(text) }
         )
-        if (started) {
-            store.update {
-                it.copy(
-                    faceState = FaceState.LISTENING,
-                    isListening = true,
-                    isProcessing = false,
-                    transcript = "",
-                    caption = "بسمعك… قولّي عايز إيه",
-                    captionSpeaker = CaptionSpeaker.YOU,
-                    vehicleMessage = "بسمعك...",
-                )
-            }
+        store.update {
+            it.copy(
+                faceState = FaceState.LISTENING,
+                isListening = true,
+                isProcessing = false,
+                transcript = "",
+                vehicleMessage = "بسمعك...",
+            )
         }
     }
 
@@ -96,8 +91,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.update {
             it.copy(
                 transcript = text,
-                caption = text,
-                captionSpeaker = CaptionSpeaker.YOU,
                 faceState = FaceState.LISTENING,
             )
         }
@@ -110,8 +103,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     faceState = FaceState.IDLE,
                     isListening = false,
                     isProcessing = false,
-                    caption = "أنا آدم، ما سمعتش كلام واضح. جرّب تاني.",
-                    captionSpeaker = CaptionSpeaker.ASSISTANT,
+                    vehicleMessage = "ما سمعتش، جرّب تاني",
                 )
             }
             return
@@ -119,8 +111,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.update {
             it.copy(
                 transcript = text,
-                caption = text,
-                captionSpeaker = CaptionSpeaker.YOU,
                 isListening = false,
                 isProcessing = true,
                 faceState = FaceState.THINKING,
@@ -129,15 +119,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             val connected = _bydState.value == BydConnectionState.READY || _bydState.value == BydConnectionState.DEGRADED
-            val response = runCatching { assistant.handleArabicCommand(text, connected) }
-                .getOrElse { error -> "أنا آدم: ${error.message ?: "حصلت مشكلة وأنا بنفذ طلبك، جرّب تاني"}" }
+            var response: String
+            try {
+                response = assistant.handleArabicCommand(text, connected)
+            } catch (error: Exception) {
+                response = "أنا آدم: ${error.message ?: "حصلت مشكلة وأنا بنفذ طلبك، جرّب تاني"}"
+            }
             store.update {
                 it.copy(
                     isProcessing = false,
                     faceState = FaceState.SPEAKING,
                     isSpeaking = true,
-                    caption = response,
-                    captionSpeaker = CaptionSpeaker.ASSISTANT,
                     vehicleMessage = response,
                 )
             }
@@ -154,10 +146,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val temperature = (state.value.climateSetpointC + delta).coerceIn(16, 30)
         viewModelScope.launch {
-            val response = runCatching {
+            var response: String
+            try {
                 vehicleController.setClimateTemperature(temperature)
-                "ضبطت الحرارة على $temperature درجة"
-            }.getOrElse { "تعذر ضبط حرارة التكييف" }
+                response = "ضبطت الحرارة على $temperature درجة"
+            } catch (e: Exception) {
+                response = "تعذر ضبط حرارة التكييف"
+            }
             store.update { it.copy(climateSetpointC = temperature, vehicleMessage = response, faceState = FaceState.HAPPY) }
         }
     }
@@ -170,10 +165,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val enabled = !climateEnabled
         climateEnabled = enabled
         viewModelScope.launch {
-            val response = runCatching {
+            var response: String
+            try {
                 vehicleController.setClimatePower(enabled)
-                if (enabled) "شغلت التكييف" else "طفيت التكييف"
-            }.getOrElse { "تعذر التحكم في التكييف" }
+                response = if (enabled) "شغلت التكييف" else "طفيت التكييف"
+            } catch (e: Exception) {
+                response = "تعذر التحكم في التكييف"
+            }
             store.update { it.copy(vehicleMessage = response, faceState = FaceState.HAPPY) }
         }
     }
@@ -184,8 +182,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 faceState = FaceState.THINKING,
                 isListening = false,
                 isProcessing = true,
-                caption = "بحول كلامك لنص…",
-                captionSpeaker = CaptionSpeaker.ASSISTANT,
                 vehicleMessage = "بحول كلامك لنص…",
             )
         }
@@ -201,12 +197,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveOpenRouterKey(key: String) {
         assistant.setLlmApiKey(key.trim())
-        _hasOpenRouterKey.value = assistant.hasLlmKey()
     }
 
     fun clearOpenRouterKey() {
         assistant.setLlmApiKey("")
-        _hasOpenRouterKey.value = false
     }
 
     fun resetToIdle() {
@@ -225,7 +219,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         connectionManager.stop()
         voiceManager.stopListening()
         voiceManager.stopSpeaking()
-        voiceManager.shutdown()
         super.onCleared()
     }
 }
