@@ -249,7 +249,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopSpeaking() {
         voiceManager.stopSpeaking()
         store.update {
-            it.copy(isSpeaking = false)
+            it.copy(isSpeaking = false, faceState = FaceState.IDLE)
+        }
+    }
+
+    fun stopAll() {
+        when {
+            state.value.isListening -> stopListening()
+            state.value.isSpeaking -> stopSpeaking()
+            else -> resetToIdle()
         }
     }
 

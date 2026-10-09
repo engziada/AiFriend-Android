@@ -14,6 +14,10 @@
 - `ModelManager` now rescans existing models anywhere under `files/models` (reuses older-version downloads).
 - Added explicit **Download models** and **Rescan models** buttons.
 - Added manual test buttons: Listen, Test TTS, Climate 22°, Window vent, Lock doors, Read SOC, Reconnect BYD.
+- Added top **status bar** with BYD connection, voice state, and model readiness indicators.
+- Added **vehicle/system message** banner below the caption for instant command feedback.
+- Added larger mic button, bigger pilot-test touch targets, and a visible **Stop/Cancel** button.
+- Added **collapsible left log panel** and a **high-contrast sunlight** toggle.
 - Fixes voice-init flow so mic permission no longer silently fails; all failures are logged and shown.
 
 ### Phase 0: Workspace Setup
