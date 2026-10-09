@@ -26,6 +26,7 @@ class VoiceManager(application: Application) {
     data class DownloadProgress(val current: Int, val total: Int, val modelName: String)
 
     private var initialized = false
+    private var asrOnlyMode = false
 
     suspend fun initialize(): Boolean {
         PilotLogger.i(TAG, "initialize() called, alreadyInitialized=$initialized")
@@ -36,8 +37,15 @@ class VoiceManager(application: Application) {
             _downloadProgress.value = DownloadProgress(current, total, name)
         }
         _modelStatus.value = modelManager.status()
-        if (!modelsReady) return fail("تعذر تجهيز نماذج الصوت. تأكد من الاتصال بالإنترنت وأعد المحاولة")
+        if (!modelsReady) {
+            // Fallback: if ASR model is present but TTS is not, still enable listening with text replies.
+            return initAsrOnlyFallback()
+        }
 
+        return initEngines()
+    }
+
+    private suspend fun initEngines(): Boolean {
         _state.value = VoiceState.INITIALIZING
         val asrPath = modelManager.getAsrModelPath()
         val ttsPath = modelManager.getTtsModelPath()
@@ -46,8 +54,41 @@ class VoiceManager(application: Application) {
         PilotLogger.i(TAG, "Initializing TTS with path: $ttsPath")
         val ttsReady = ttsEngine.initialize(ttsPath)
         PilotLogger.i(TAG, "Engine init result: ASR=$asrReady TTS=$ttsReady")
-        if (!asrReady || !ttsReady) return fail("تعذر تشغيل محرك الصوت على هذا الجهاز")
+        if (!asrReady) return fail("تعذر تشغيل محرك التعرف على الكلام")
+        if (!ttsReady) {
+            asrOnlyMode = true
+            PilotLogger.w(TAG, "TTS failed; continuing in ASR-only mode")
+        } else {
+            asrOnlyMode = false
+        }
+        setupListeners()
+        initialized = true
+        _state.value = VoiceState.READY
+        PilotLogger.i(TAG, "VoiceManager initialized and READY (asrOnly=$asrOnlyMode)")
+        return true
+    }
 
+    private suspend fun initAsrOnlyFallback(): Boolean {
+        _modelStatus.value = modelManager.status()
+        val status = _modelStatus.value
+        PilotLogger.i(TAG, "Checking ASR-only fallback: asrReady=${status.asrReady} ttsReady=${status.ttsReady}")
+        if (!status.asrReady) {
+            return fail("تعذر تجهيز نماذج الصوت. تأكد من الاتصال بالإنترنت وأعد المحاولة")
+        }
+        _state.value = VoiceState.INITIALIZING
+        val asrPath = modelManager.getAsrModelPath()
+        val asrReady = asrEngine.initialize(asrPath)
+        if (!asrReady) return fail("تعذر تشغيل محرك التعرف على الكلام")
+        asrOnlyMode = true
+        setupListeners()
+        initialized = true
+        _state.value = VoiceState.READY
+        _errorMessage.value = "نموذج الكلام غير متاح؛ الأوامر الصوتية ستظهر كنص فقط"
+        PilotLogger.i(TAG, "VoiceManager initialized in ASR-only mode")
+        return true
+    }
+
+    private fun setupListeners() {
         asrEngine.setListener(object : SherpaAsrEngine.Listener {
             override fun onPartial(text: String) { partialResult?.invoke(text) }
             override fun onFinal(text: String) {
@@ -77,10 +118,6 @@ class VoiceManager(application: Application) {
                 _state.value = VoiceState.READY
             }
         })
-        initialized = true
-        _state.value = VoiceState.READY
-        PilotLogger.i(TAG, "VoiceManager initialized and READY")
-        return true
     }
 
     /** Explicitly (re)download models; used by the pilot download button. */
@@ -88,18 +125,19 @@ class VoiceManager(application: Application) {
         PilotLogger.i(TAG, "downloadModels() started")
         _errorMessage.value = null
         _state.value = VoiceState.DOWNLOADING_MODELS
+        initialized = false
         val ok = modelManager.ensureModelsDownloaded { name, current, total ->
             _downloadProgress.value = DownloadProgress(current, total, name)
         }
         _modelStatus.value = modelManager.status()
         PilotLogger.i(TAG, "downloadModels() finished: ok=$ok")
         if (!ok) {
+            if (initAsrOnlyFallback()) return true
             _state.value = VoiceState.ERROR
             _errorMessage.value = "فشل تحميل النماذج. تأكد من الإنترنت."
-        } else {
-            _state.value = VoiceState.IDLE
+            return false
         }
-        return ok
+        return initEngines()
     }
 
     /** Re-scan for models and reinitialize engines. Used when models were manually copied. */
@@ -142,8 +180,14 @@ class VoiceManager(application: Application) {
     suspend fun speak(text: String): Boolean {
         PilotLogger.i(TAG, "TTS speak: ${text.take(80)}")
         if (!initialized) return false
+        if (asrOnlyMode) {
+            PilotLogger.i(TAG, "ASR-only mode: skipping audio output")
+            return false
+        }
         return ttsEngine.speak(text)
     }
+
+    fun isAsrOnly(): Boolean = initialized && asrOnlyMode
 
     fun stopSpeaking() = ttsEngine.stop()
 
@@ -159,6 +203,7 @@ class VoiceManager(application: Application) {
         asrEngine.shutdown()
         ttsEngine.shutdown()
         initialized = false
+        asrOnlyMode = false
     }
 
     companion object { private const val TAG = "VoiceManager" }

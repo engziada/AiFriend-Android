@@ -9,16 +9,20 @@
 
 ## ✅ Phases Complete (0-4) + Pilot Test Debug Shell
 
-### Pilot Test (v0.2.0)
+### Pilot Test (v0.2.0 → v0.2.1)
 - Added `PilotLogger` with in-app log window, copy-to-clipboard, and share/export.
 - `ModelManager` now rescans existing models anywhere under `files/models` (reuses older-version downloads).
 - Added explicit **Download models** and **Rescan models** buttons.
 - Added manual test buttons: Listen, Test TTS, Climate 22°, Window vent, Lock doors, Read SOC, Reconnect BYD.
 - Added top **status bar** with BYD connection, voice state, and model readiness indicators.
 - Added **vehicle/system message** banner below the caption for instant command feedback.
-- Added larger mic button, bigger pilot-test touch targets, and a visible **Stop/Cancel** button.
+- Added larger mic button, bigger pilot test chips, and a visible **Stop/Cancel** button.
 - Added **collapsible left log panel** and a **high-contrast sunlight** toggle.
-- Fixes voice-init flow so mic permission no longer silently fails; all failures are logged and shown.
+- **v0.2.1 fixes**:
+  - Resumable + retried model downloads with longer read timeout; TTS archive corruption now auto-retries.
+  - ASR-only fallback: voice commands still work even if TTS model is missing.
+  - Fixed ADB authentication branch and added per-step diagnostics.
+  - Added BYD connection retry loop.
 
 ### Phase 0: Workspace Setup
 - Gradle 8.13 wrapper, JDK 21 configured

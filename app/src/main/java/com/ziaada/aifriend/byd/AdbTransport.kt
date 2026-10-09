@@ -2,10 +2,9 @@ package com.ziaada.aifriend.byd
 
 import android.content.Context
 import android.util.Base64
-import android.util.Log
+import com.ziaada.aifriend.pilot.PilotLogger
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -55,17 +54,26 @@ class AdbTransport(
     fun connect(): Boolean {
         try {
             loadOrGenerateKeys()
+            PilotLogger.i(TAG, "Connecting to ADB $host:$port ...")
             socket = Socket()
             socket?.soTimeout = BydConstants.ADB_SOCKET_TIMEOUT_MS
             socket?.connect(InetSocketAddress(host, port), BydConstants.ADB_SOCKET_TIMEOUT_MS)
             dataOut = DataOutputStream(socket?.getOutputStream()!!)
             dataIn = DataInputStream(socket?.getInputStream()!!)
+            PilotLogger.i(TAG, "TCP socket connected")
 
-            if (!handshake()) return false
-            if (!authenticate()) return false
+            if (!handshake()) {
+                PilotLogger.e(TAG, "ADB handshake failed")
+                return false
+            }
+            if (!authenticate()) {
+                PilotLogger.e(TAG, "ADB authentication failed")
+                return false
+            }
+            PilotLogger.i(TAG, "ADB connected and authenticated")
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Connection failed", e)
+            PilotLogger.e(TAG, "ADB connection failed: ${e.javaClass.simpleName}: ${e.message}")
             disconnect()
             return false
         }
@@ -84,9 +92,10 @@ class AdbTransport(
                 val privateKey = keyFactory.generatePrivate(PKCS8EncodedKeySpec(privBytes))
                 val publicKey = keyFactory.generatePublic(X509EncodedKeySpec(pubBytes))
                 keyPair = KeyPair(publicKey, privateKey)
+                PilotLogger.i(TAG, "Loaded existing ADB key pair")
                 return
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to load keys, regenerating", e)
+                PilotLogger.e(TAG, "Failed to load keys, regenerating: ${e.message}")
             }
         }
 
@@ -97,21 +106,24 @@ class AdbTransport(
         try {
             java.nio.file.Files.write(privFile.toPath(), keyPair!!.private.encoded)
             java.nio.file.Files.write(pubFile.toPath(), keyPair!!.public.encoded)
+            PilotLogger.i(TAG, "Generated and saved new ADB key pair")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save keys", e)
+            PilotLogger.e(TAG, "Failed to save keys", e)
         }
     }
 
     private fun handshake(): Boolean {
-        val banner = "host::\u0000".toByteArray()
-        sendPacket(CMD_CNXN, 0x01000001, 0, banner)
+        val banner = "host::features=shell_v2,cmd\u0000".toByteArray(Charsets.UTF_8)
+        sendPacket(CMD_CNXN, 0x01000001, MAX_PAYLOAD, banner)
 
         val result = readPacket()
+        PilotLogger.i(TAG, "Handshake response cmd=${cmdName(result.cmd)}")
         return when (result.cmd) {
             CMD_CNXN -> true
             CMD_STLS -> {
                 sendPacket(CMD_STLS, 0x01000000, 0, ByteArray(0))
                 val result2 = readPacket()
+                PilotLogger.i(TAG, "STLS response cmd=${cmdName(result2.cmd)}")
                 result2.cmd == CMD_CNXN
             }
             else -> false
@@ -120,29 +132,46 @@ class AdbTransport(
 
     private fun authenticate(): Boolean {
         var attempts = 0
-        while (attempts < 3) {
+        while (attempts < 5) {
             val result = readPacket()
+            PilotLogger.i(TAG, "Auth packet cmd=${cmdName(result.cmd)} arg0=${result.arg0}")
             when (result.cmd) {
                 CMD_AUTH -> {
                     when (result.arg0) {
                         AUTH_TOKEN -> {
                             val token = result.payload.copyOf()
                             val signature = signToken(token)
+                            PilotLogger.i(TAG, "Sending AUTH_SIGNATURE for token")
                             sendPacket(CMD_AUTH, AUTH_SIGNATURE, 0, signature)
                         }
-                        AUTH_SIGNATURE -> return true
-                        AUTH_TOKEN -> {
+                        AUTH_SIGNATURE -> {
+                            PilotLogger.i(TAG, "AUTH_SIGNATURE accepted")
+                            return true
+                        }
+                        AUTH_RSAPUBLICKEY -> {
                             val pubKeyBlob = buildPublicKeyBlob()
+                            PilotLogger.i(TAG, "Sending AUTH_RSAPUBLICKEY (allow USB debugging prompt may appear)")
                             sendPacket(CMD_AUTH, AUTH_RSAPUBLICKEY, 0, pubKeyBlob)
                             Thread.sleep(BydConstants.ADB_AUTH_TIMEOUT_MS.toLong())
                         }
+                        else -> {
+                            PilotLogger.w(TAG, "Unknown AUTH arg0=${result.arg0}")
+                            return false
+                        }
                     }
                 }
-                CMD_CNXN -> return true
-                else -> return false
+                CMD_CNXN -> {
+                    PilotLogger.i(TAG, "CNXN received during auth")
+                    return true
+                }
+                else -> {
+                    PilotLogger.e(TAG, "Unexpected auth packet cmd=${cmdName(result.cmd)}")
+                    return false
+                }
             }
             attempts++
         }
+        PilotLogger.e(TAG, "Authentication exceeded max attempts")
         return false
     }
 
@@ -274,7 +303,7 @@ class AdbTransport(
             dataIn!!.readFully(buf)
             val calcChecksum = buf.fold(0) { acc, b -> acc + (b.toInt() and 0xFF) }
             if (calcChecksum != checksum) {
-                Log.w(TAG, "Checksum mismatch: expected $checksum, got $calcChecksum")
+                PilotLogger.w(TAG, "Checksum mismatch: expected $checksum, got $calcChecksum")
             }
             buf
         } else ByteArray(0)
@@ -288,7 +317,7 @@ class AdbTransport(
         try {
             socket?.close()
         } catch (e: Exception) {
-            Log.w(TAG, "Disconnect error", e)
+            PilotLogger.w(TAG, "Disconnect error: ${e.message}")
         }
         socket = null
         dataOut = null
@@ -296,6 +325,17 @@ class AdbTransport(
     }
 
     fun isConnected(): Boolean = socket?.isConnected == true && socket?.isClosed == false
+
+    private fun cmdName(cmd: Int): String = when (cmd) {
+        CMD_CNXN -> "CNXN"
+        CMD_AUTH -> "AUTH"
+        CMD_OPEN -> "OPEN"
+        CMD_OKAY -> "OKAY"
+        CMD_CLSE -> "CLSE"
+        CMD_WRTE -> "WRTE"
+        CMD_STLS -> "STLS"
+        else -> "0x${cmd.toUInt().toString(16)}"
+    }
 
     data class AdbPacket(
         val cmd: Int,

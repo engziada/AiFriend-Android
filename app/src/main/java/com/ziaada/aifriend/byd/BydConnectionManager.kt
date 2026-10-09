@@ -1,8 +1,8 @@
 package com.ziaada.aifriend.byd
 
 import android.content.Context
-import android.util.Log
 import com.ziaada.aifriend.domain.VehicleController
+import com.ziaada.aifriend.pilot.PilotLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,32 +40,55 @@ class BydConnectionManager(
     private val _telemetry = MutableSharedFlow<VehicleController.Telemetry>(replay = 1)
     val telemetryFlow = _telemetry.asSharedFlow()
 
+    private var job: Job? = null
+
     fun start() {
-        scope.launch {
-            connect()
+        stop()
+        job = scope.launch {
+            var attempt = 0
+            val maxAttempts = 5
+            while (attempt < maxAttempts) {
+                attempt++
+                PilotLogger.i(TAG, "Connection attempt $attempt/$maxAttempts")
+                val connected = connect()
+                if (connected) {
+                    attempt = 0
+                    // Stay here; telemetry polling runs inside connect()
+                    while (_state.value == BydConnectionState.READY || _state.value == BydConnectionState.DEGRADED) {
+                        delay(2000)
+                    }
+                    PilotLogger.w(TAG, "Connection lost, will retry")
+                } else {
+                    delay(2000L * attempt)
+                }
+            }
+            updateState(BydConnectionState.ERROR)
+            PilotLogger.e(TAG, "Exceeded max connection attempts")
         }
     }
 
     fun stop() {
-        scope.coroutineContext[Job]?.cancel()
+        job?.cancel()
+        job = null
         adbTransport?.disconnect()
     }
 
     val vehicleController: BydVehicleController?
         get() = _vehicleController
 
-    private suspend fun connect() {
+    private suspend fun connect(): Boolean {
         updateState(BydConnectionState.ADB_CONNECTING)
 
         adbTransport = AdbTransport(context)
         if (!adbTransport!!.connect()) {
             updateState(BydConnectionState.ERROR)
-            return
+            return false
         }
-
         updateState(BydConnectionState.ADB_AUTHENTICATING)
+        // AdbTransport.connect() already performs handshake + auth; authentication success means we're on.
 
         updateState(BydConnectionState.DAEMON_STARTING)
+        // HelperDaemon spawn is currently a no-op placeholder; assume autoservice is reachable via exec.
 
         updateState(BydConnectionState.FID_SYNCING)
         autoserviceClient = AutoserviceClient(context, adbTransport!!)
@@ -81,11 +104,12 @@ class BydConnectionManager(
         _vehicleController = BydVehicleController(autoserviceClient!!)
 
         startTelemetryPolling()
+        return true
     }
 
     private fun updateState(state: BydConnectionState) {
         scope.launch { _state.value = state }
-        Log.d(TAG, "State: $state")
+        PilotLogger.i(TAG, "State: $state")
     }
 
     private fun startTelemetryPolling() {
