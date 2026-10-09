@@ -12,12 +12,8 @@ android {
         applicationId = "com.ziaada.aifriend"
         minSdk = 32
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
+        versionCode = 2
+        versionName = "0.2.0-pilot"
     }
 
     signingConfigs {
@@ -87,6 +83,7 @@ dependencies {
     // JSON parsing for FID catalog
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // Offline Arabic ASR/TTS via local sherpa-onnx AAR (from GitHub release v1.13.8)
-    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    // Offline Arabic ASR/TTS. The native runtime is packaged for Android by Sherpa-ONNX.
+    implementation("com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8")
+    implementation("org.apache.commons:commons-compress:1.28.0")
 }

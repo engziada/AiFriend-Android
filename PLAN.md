@@ -7,7 +7,14 @@
 
 ---
 
-## ✅ Phases Complete (0-4)
+## ✅ Phases Complete (0-4) + Pilot Test Debug Shell
+
+### Pilot Test (v0.2.0)
+- Added `PilotLogger` with in-app log window, copy-to-clipboard, and share/export.
+- `ModelManager` now rescans existing models anywhere under `files/models` (reuses older-version downloads).
+- Added explicit **Download models** and **Rescan models** buttons.
+- Added manual test buttons: Listen, Test TTS, Climate 22°, Window vent, Lock doors, Read SOC, Reconnect BYD.
+- Fixes voice-init flow so mic permission no longer silently fails; all failures are logged and shown.
 
 ### Phase 0: Workspace Setup
 - Gradle 8.13 wrapper, JDK 21 configured
@@ -87,12 +94,15 @@ The models are downloaded once into app-private storage. Speech processing uses 
 1. `adb connect <headunit-ip>:5555`
 2. `adb install -r app-debug.apk`
 3. Grant RECORD_AUDIO + "Allow USB debugging" (always allow)
-4. Watch logcat: `adb logcat -s FidCatalogManager:D AutoserviceClient:D BydConnectionManager:D`
-5. Verify state reaches `READY` (FID dump succeeded)
-6. Test read-only sweep: SOC/speed/temps plausible?
-7. Test writes (least → most risk): rear defrost → climate on → temp 22 → auto → window vent → windows up → sunroof tilt → locks (parked)
-8. Voice: 10 fixed phrases; measure WER + latency (target <1.5s to action)
-9. Export logs via `adb pull` for analysis
+4. Open the **left log panel** on the head unit and watch:
+   - `ModelStatus` rows: ASR/TTS should show "جاهز" if models exist
+   - `VoiceManager` should reach `READY`
+   - `BYD state` should reach `READY` or `DEGRADED`
+5. If models are missing: tap **تحميل** (requires internet) or **إعادة تفحص** if they were copied manually.
+6. Test TTS: tap **تجربة صوت** — you should hear Arabic speech. If not, check logs for TTS init failure.
+7. Test listen: tap **استمع** or the mic button and speak. Watch the partial/final transcript in logs and caption.
+8. Test vehicle commands manually via the pilot buttons before relying on voice.
+9. If something fails: tap the share button to email/Save the log, or pull via `adb logcat`.
 
 ---
 
@@ -129,3 +139,5 @@ adb logcat -s FidCatalogManager:D AutoserviceClient:D BydConnectionManager:D Voi
 - **OpenRouter API key** stored in SharedPreferences (`llm_prefs` / `openrouter_key`) — enter via settings UI (to be built) or `adb shell`
 - **FID catalog** auto-cached per firmware fingerprint — delete `fid-catalog.json` in app files to force re-dump
 - **Debug keystore** in repo (`debug.keystore`, password `android`) — replace with release keystore for production
+- **Pilot logs** are kept in memory (last 500 lines). Use the left panel copy/share buttons, or pull via `adb logcat -s PilotLogger:D`.
+- **Model reuse** works automatically: if an older version left model files anywhere under `files/models`, the app finds and reuses them.

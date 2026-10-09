@@ -15,38 +15,65 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,27 +81,20 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.ziaada.aifriend.domain.CaptionSpeaker
+import com.ziaada.aifriend.pilot.PilotLogger
 import com.ziaada.aifriend.ui.MainViewModel
 import com.ziaada.aifriend.ui.face.AiFace
 import com.ziaada.aifriend.ui.theme.AiFriendTheme
+import com.ziaada.aifriend.voice.ModelManager
 import com.ziaada.aifriend.voice.VoiceManager
-import com.ziaada.aifriend.LogManager
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.border
-import androidx.compose.material3.Divider
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.ui.text.font.FontFamily
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
-
     private val requestAudio = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.beginListening()
     }
-
     private lateinit var insetsController: WindowInsetsControllerCompat
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,7 +104,6 @@ class MainActivity : ComponentActivity() {
         insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         hideSystemBars()
-
         setContent {
             AiFriendTheme {
                 AiFriendScreen(viewModel = vm, onMic = ::toggleListening)
@@ -111,228 +130,83 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun SimpleTestButton(label: String, color: Color, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-// ===== Simple Pilot Test Panel =====
-@Composable
-fun PilotTestPanel(
-    viewModel: MainViewModel,
-    modifier: Modifier = Modifier,
-) {
-    val logsText by remember { mutableStateOf(LogManager.getLogs().reversed().joinToString("\n")) }
-
-    Surface(
-        modifier = modifier
-            .fillMaxSize()
-            .width(360.dp)
-            .background(Color(0xFF0A1A2A))
-            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)),
-        shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("🛠 Pilot Test Panel", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            }
-
-            HorizontalDivider(color = Color.White.copy(alpha = 0.2f))
-
-            // --- Log Window ---
-            Text("📋 Verbose Logs", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF7CE4D7))
-            
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("Logs: ${LogManager.getLogs().size}", fontSize = 12.sp, color = Color.White.copy(alpha = 0.7f))
-            }
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .background(Color(0xFF061622))
-                    .padding(8.dp),
-                shape = RoundedCornerShape(8.dp),
-            ) {
-                Text(
-                    text = LogManager.getLogs().reversed().joinToString("\n"),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(8.dp),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = Color.White,
-                )
-            }
-
-            HorizontalDivider(color = Color.White.copy(alpha = 0.2f))
-
-            // --- Missing Models Download ---
-            Text("📥 تنزيل النماذج المفقودة", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD54F))
-            
-            Button(
-                onClick = { 
-                    LogManager.log("PILOT", "Download missing models clicked")
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD54F), contentColor = Color.Black),
-            ) {
-                Text("تنزيل النماذج المفقودة", fontWeight = FontWeight.Bold)
-            }
-
-            HorizontalDivider(color = Color.White.copy(alpha = 0.2f))
-
-            // --- Manual Test Buttons ---
-            Text("🔧 أزرار اختبار يدوية", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF7CE4D7))
-
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("🌡️ التكييف", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("تشغيل", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Climate ON") }
-                    SimpleTestButton("إيقاف", Color(0xFFF44336)) { LogManager.log("PILOT", "Test: Climate OFF") }
-                    SimpleTestButton("أوتو", Color(0xFF2196F3)) { LogManager.log("PILOT", "Test: Climate Auto") }
-                    SimpleTestButton("22°", Color(0xFF9C27B0)) { LogManager.log("PILOT", "Test: Climate 22°C") }
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("تدوير", Color(0xFF00BCD4)) { LogManager.log("PILOT", "Test: Climate Recirc") }
-                    SimpleTestButton("إزالة ضباب", Color(0xFF673AB7)) { LogManager.log("PILOT", "Test: Defrost") }
-                    SimpleTestButton("مروحة 3", Color(0xFF795548)) { LogManager.log("PILOT", "Test: Fan 3") }
-                }
-
-                Text("🪟 الشبابيك", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("كل افتح", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Windows All Open") }
-                    SimpleTestButton("كل قفل", Color(0xFFF44336)) { LogManager.log("PILOT", "Test: Windows All Close") }
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("سائق", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Window Driver") }
-                    SimpleTestButton("راكب", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Window Passenger") }
-                    SimpleTestButton("خلف يمين", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Window Rear Right") }
-                    SimpleTestButton("خلف يسار", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Window Rear Left") }
-                }
-
-                Text("☀️ السقف", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("افتح", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Sunroof Open") }
-                    SimpleTestButton("قفل", Color(0xFFF44336)) { LogManager.log("PILOT", "Test: Sunroof Close") }
-                    SimpleTestButton("ميل", Color(0xFFFF9800)) { LogManager.log("PILOT", "Test: Sunroof Tilt") }
-                    SimpleTestButton("ستارة", Color(0xFF607D8B)) { LogManager.log("PILOT", "Test: Sunshade") }
-                }
-
-                Text("🔐 الأبواب", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("قفل الكل", Color(0xFFF44336)) { LogManager.log("PILOT", "Test: Doors Lock") }
-                    SimpleTestButton("فتح الكل", Color(0xFF4CAF50)) { LogManager.log("PILOT", "Test: Doors Unlock") }
-                    SimpleTestButton("شنطة أمامية", Color(0xFF795548)) { LogManager.log("PILOT", "Test: Frunk") }
-                }
-
-                Text("📊 استعلامات", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("SOC", Color(0xFF2196F3)) { LogManager.log("PILOT", "Test: SOC Query") }
-                    SimpleTestButton("المدى", Color(0xFF00BCD4)) { LogManager.log("PILOT", "Test: Range Query") }
-                    SimpleTestButton("حرارة", Color(0xFFFF9800)) { LogManager.log("PILOT", "Test: Temp Query") }
-                    SimpleTestButton("ضغط إطارات", Color(0xFF607D8B)) { LogManager.log("PILOT", "Test: TPMS Query") }
-                }
-
-                Text("🎤 الصوت", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SimpleTestButton("اختبار ASR", Color(0xFF9C27B0)) { LogManager.log("PILOT", "Test: ASR Test") }
-                    SimpleTestButton("اختبار TTS", Color(0xFFE91E63)) { LogManager.log("PILOT", "Test: TTS Test") }
-                    SimpleTestButton("测试 VAD", Color(0xFF00BCD4)) { LogManager.log("PILOT", "Test: VAD Test") }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit) {
+private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
-    val voiceDownloadProgress by viewModel.voiceDownloadProgress.collectAsStateWithLifecycle()
+    val voiceError by viewModel.voiceError.collectAsStateWithLifecycle()
     val hasOpenRouterKey by viewModel.hasOpenRouterKey.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
 
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(Color(0xFF081522), Color(0xFF0C1D2C), Color(0xFF081522)))),
     ) {
-        Column(Modifier.fillMaxSize()) {
-            AiFace(
-                state = state.faceState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.5f),
-            )
+        PilotPanel(
+            viewModel = viewModel,
+            modifier = Modifier
+                .fillMaxHeight()
+                .weight(0.40f)
+                .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
+        )
 
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.5f)
-                    .padding(horizontal = 40.dp, vertical = 12.dp),
-            ) {
-                val buttonSize = (maxHeight * 0.52f).coerceIn(108.dp, 158.dp)
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.SpaceBetween,
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .weight(0.60f)
+                .padding(start = 6.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                AiFace(
+                    state = state.faceState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.5f),
+                )
+
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.5f)
+                        .padding(horizontal = 28.dp, vertical = 8.dp),
                 ) {
-                    ListenButton(
-                        voiceState = voiceState,
-                        listening = state.isListening,
-                        buttonSize = buttonSize,
-                        onClick = onMic,
-                    )
-                    StatusBar(
-                        state = state,
-                        voiceState = voiceState,
-                        voiceDownloadProgress = voiceDownloadProgress,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 20.dp),
-                    )
+                    val buttonSize = (maxHeight * 0.50f).coerceIn(96.dp, 142.dp)
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        ListenButton(
+                            state = voiceState,
+                            listening = state.isListening,
+                            buttonSize = buttonSize,
+                            onClick = onMic,
+                        )
+                        CaptionBar(
+                            speaker = if (voiceError != null) null else state.captionSpeaker,
+                            text = voiceError ?: state.caption,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 72.dp, max = 96.dp),
+                        )
+                    }
                 }
             }
-        }
 
-        IconButton(
-            onClick = { showSettings = true },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(14.dp)
-                .size(48.dp),
-        ) {
-            Icon(
-                Icons.Default.Settings,
-                contentDescription = "إعدادات آدم",
-                tint = Color.White.copy(alpha = 0.84f),
-            )
+            IconButton(
+                onClick = { showSettings = true },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .size(44.dp),
+            ) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = "إعدادات آدم",
+                    tint = Color.White.copy(alpha = 0.84f),
+                )
+            }
         }
     }
 
@@ -382,19 +256,217 @@ fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ListenButton(
-    voiceState: VoiceManager.VoiceState,
+private fun PilotPanel(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+    val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val modelStatus by viewModel.modelStatus.collectAsStateWithLifecycle()
+    val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
+    val downloadProgress by viewModel.voiceDownloadProgress.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    // Auto-scroll to newest log
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
+    }
+
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2433)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+        ) {
+            Text(
+                text = "سجل التشغيل",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFF06131D), RoundedCornerShape(14.dp))
+                    .padding(8.dp),
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(logs, key = { it.hashCode() }) { line ->
+                        val color = when (line.level) {
+                            PilotLogger.Level.E -> Color(0xFFFF8A80)
+                            PilotLogger.Level.W -> Color(0xFFFFE082)
+                            PilotLogger.Level.I -> Color(0xFF8BCCEB)
+                            PilotLogger.Level.D -> Color(0xFFB0BEC5)
+                        }
+                        Text(
+                            text = "[${line.time}] ${line.level.name}/${line.tag}: ${line.message}",
+                            color = color,
+                            fontSize = 11.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            lineHeight = 14.sp,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                IconButton(onClick = {
+                    PilotLogger.copyToClipboard(context)
+                    clipboard.setText(AnnotatedString("copied"))
+                }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "نسخ السجل", tint = Color.White)
+                }
+                IconButton(onClick = {
+                    scope.launch {
+                        val uri = PilotLogger.saveAndShare(context)
+                        uri?.let { PilotLogger.share(context, it) }
+                    }
+                }) {
+                    Icon(Icons.Default.Share, contentDescription = "مشاركة السجل", tint = Color.White)
+                }
+                IconButton(onClick = { viewModel.clearLogs() }) {
+                    Icon(Icons.Default.Delete, contentDescription = "مسح السجل", tint = Color(0xFFFF8A80))
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color(0xFF2A4658))
+
+            Text(
+                text = "النماذج الصوتية",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(6.dp))
+
+            ModelStatusRow(label = "التعرف على الكلام", ready = modelStatus.asrReady)
+            ModelStatusRow(label = "توليد الصوت", ready = modelStatus.ttsReady)
+
+            if (voiceState == VoiceManager.VoiceState.DOWNLOADING_MODELS) {
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { if (downloadProgress.total > 0) downloadProgress.current.toFloat() / downloadProgress.total else 0f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFF6CE0D1),
+                    trackColor = Color(0xFF2A4658),
+                )
+                Text(
+                    text = "${downloadProgress.modelName} ${downloadProgress.current / 1024 / 1024}MB / ${downloadProgress.total / 1024 / 1024}MB",
+                    color = Color(0xFFB6C9CE),
+                    fontSize = 12.sp,
+                )
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = { viewModel.downloadVoiceModels() },
+                    enabled = voiceState != VoiceManager.VoiceState.DOWNLOADING_MODELS,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176C83)),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("تحميل", fontSize = 13.sp)
+                }
+                Button(
+                    onClick = { viewModel.rescanVoiceModels() },
+                    enabled = voiceState != VoiceManager.VoiceState.DOWNLOADING_MODELS && voiceState != VoiceManager.VoiceState.INITIALIZING,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3A5A6B)),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("إعادة تفحص", fontSize = 13.sp)
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color(0xFF2A4658))
+
+            Text(
+                text = "اختبار يدوي",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(6.dp))
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                TestChip("استمع") { viewModel.beginListening() }
+                TestChip("تجربة صوت") { viewModel.testTts() }
+                TestChip("تكييف 22°") { viewModel.runManualCommand("خلي التكييف على 22") }
+                TestChip("افتح شباك") { viewModel.runManualCommand("افتح شباك السائق للتهوية") }
+                TestChip("اقفل الأبواب") { viewModel.runManualCommand("اقفل الأبواب") }
+                TestChip("اقرأ البطارية") { viewModel.runManualCommand("كام في المية") }
+                TestChip(" reconnect") { viewModel.reconnectByd() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelStatusRow(label: String, ready: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = label, color = Color(0xFFB6C9CE), fontSize = 14.sp)
+        Text(
+            text = if (ready) "جاهز" else "غير موجود",
+            color = if (ready) Color(0xFF6CE0D1) else Color(0xFFFF8A80),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun TestChip(label: String, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1C3A4A)),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(text = label, fontSize = 12.sp, color = Color.White)
+    }
+}
+
+@Composable
+private fun ListenButton(
+    state: VoiceManager.VoiceState,
     listening: Boolean,
     buttonSize: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
 ) {
-    val enabled = voiceState in setOf(
+    val enabled = state in setOf(
         VoiceManager.VoiceState.READY,
         VoiceManager.VoiceState.ERROR,
         VoiceManager.VoiceState.LISTENING,
     )
-    val label = when (voiceState) {
+    val label = when (state) {
         VoiceManager.VoiceState.DOWNLOADING_MODELS -> "تحميل الصوت"
         VoiceManager.VoiceState.INITIALIZING -> "جاري التجهيز"
         VoiceManager.VoiceState.LISTENING -> "إيقاف الاستماع"
@@ -432,33 +504,31 @@ fun ListenButton(
 }
 
 @Composable
-fun StatusBar(
-    state: com.ziaada.aifriend.domain.AiFriendUiState,
-    voiceState: VoiceManager.VoiceState,
-    voiceDownloadProgress: VoiceManager.DownloadProgress,
-    modifier: Modifier = Modifier,
-) {
-    val voiceLabel = when (voiceState) {
-        VoiceManager.VoiceState.DOWNLOADING_MODELS -> "جاري تحميل نماذج الصوت... ${if (voiceDownloadProgress.total > 0) "${(voiceDownloadProgress.current * 100 / voiceDownloadProgress.total)}%" else ""}"
-        VoiceManager.VoiceState.INITIALIZING -> "تهيئة المحرك الصوتي..."
-        VoiceManager.VoiceState.ERROR -> "خطأ في الصوت: ${state.vehicleMessage}"
-        else -> state.vehicleMessage
-    }
-
+private fun CaptionBar(speaker: CaptionSpeaker?, text: String, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier
-            .background(Color(0xFF132A3A)),
-        shape = RoundedCornerShape(26.dp),
+        modifier = modifier,
+        color = Color(0xFF132A3A),
         contentColor = Color.White,
+        shape = RoundedCornerShape(26.dp),
+        shadowElevation = 10.dp,
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 26.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 26.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = voiceLabel,
+                text = when (speaker) {
+                    CaptionSpeaker.YOU -> "أنت قلت"
+                    CaptionSpeaker.ASSISTANT -> "آدم قال"
+                    null -> "تنبيه صوتي"
+                },
+                color = if (speaker == CaptionSpeaker.YOU) Color(0xFF7CE4D7) else Color(0xFF9FCBE0),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = text,
+                modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
                 color = Color(0xFFF3F8FA),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Medium,
