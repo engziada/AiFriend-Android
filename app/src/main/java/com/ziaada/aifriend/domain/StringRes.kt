@@ -2,6 +2,7 @@ package com.ziaada.aifriend.domain
 
 import android.content.Context
 import android.content.res.Resources
+import com.ziaada.aifriend.R
 
 class StringRes(private val context: Context) {
     private val res: Resources = context.resources
@@ -10,65 +11,65 @@ class StringRes(private val context: Context) {
     fun get(id: Int, vararg formatArgs: Any): String = res.getString(id, *formatArgs)
 
     companion object {
-        const val voice_ready = 0x7f040000
-        const val voice_listening = 0x7f040001
-        const val voice_thinking = 0x7f040002
-        const val voice_error = 0x7f040003
-        const val help_text = 0x7f040004
-        const val command_not_understood = 0x7f040005
+        val voice_ready = R.string.voice_ready
+        val voice_listening = R.string.voice_listening
+        val voice_thinking = R.string.voice_thinking
+        val voice_error = R.string.voice_error
+        val help_text = R.string.help_text
+        val command_not_understood = R.string.command_not_understood
 
-        const val climate_on = 0x7f040006
-        const val climate_off = 0x7f040007
-        const val climate_auto_on = 0x7f040008
-        const val climate_temp_set = 0x7f040009
-        const val climate_fan_set = 0x7f04000a
-        const val climate_recirc_on = 0x7f04000b
-        const val climate_recirc_off = 0x7f04000c
-        const val climate_defrost_on = 0x7f04000d
-        const val climate_defrost_off = 0x7f04000e
+        val climate_on = R.string.climate_on
+        val climate_off = R.string.climate_off
+        val climate_auto_on = R.string.climate_auto_on
+        val climate_temp_set = R.string.climate_temp_set
+        val climate_fan_set = R.string.climate_fan_set
+        val climate_recirc_on = R.string.climate_recirc_on
+        val climate_recirc_off = R.string.climate_recirc_off
+        val climate_defrost_on = R.string.climate_defrost_on
+        val climate_defrost_off = R.string.climate_defrost_off
 
-        const val windows_all_open = 0x7f04000f
-        const val windows_all_close = 0x7f040010
-        const val window_open = 0x7f040011
-        const val window_close = 0x7f040012
-        const val window_vent = 0x7f040013
-        const val window_pos_set = 0x7f040014
+        val windows_all_open = R.string.windows_all_open
+        val windows_all_close = R.string.windows_all_close
+        val window_open = R.string.window_open
+        val window_close = R.string.window_close
+        val window_vent = R.string.window_vent
+        val window_pos_set = R.string.window_pos_set
 
-        const val sunroof_open = 0x7f040015
-        const val sunroof_close = 0x7f040016
-        const val sunroof_tilt = 0x7f040017
-        const val sunshade_open = 0x7f040018
-        const val sunshade_close = 0x7f040019
+        val sunroof_open = R.string.sunroof_open
+        val sunroof_close = R.string.sunroof_close
+        val sunroof_tilt = R.string.sunroof_tilt
+        val sunshade_open = R.string.sunshade_open
+        val sunshade_close = R.string.sunshade_close
 
-        const val doors_locked = 0x7f04001a
-        const val doors_unlocked = 0x7f04001b
-        const val frunk_open = 0x7f04001c
-        const val frunk_close = 0x7f04001d
+        val doors_locked = R.string.doors_locked
+        val doors_unlocked = R.string.doors_unlocked
+        val frunk_open = R.string.frunk_open
+        val frunk_close = R.string.frunk_close
 
-        const val seat_heat_on = 0x7f04001e
-        const val seat_heat_off = 0x7f04001f
-        const val seat_vent_on = 0x7f040020
-        const val seat_vent_off = 0x7f040021
-        const val seat_level_set = 0x7f040022
+        val seat_heat_on = R.string.seat_heat_on
+        val seat_heat_off = R.string.seat_heat_off
+        val seat_vent_on = R.string.seat_vent_on
+        val seat_vent_off = R.string.seat_vent_off
+        val seat_level_set = R.string.seat_level_set
 
-        const val steering_heat_on = 0x7f040023
-        const val steering_heat_off = 0x7f040024
+        val steering_heat_on = R.string.steering_heat_on
+        val steering_heat_off = R.string.steering_heat_off
 
-        const val drive_mode_set = 0x7f040025
+        val drive_mode_set = R.string.drive_mode_set
 
-        const val telemetry_soc = 0x7f040026
-        const val telemetry_range = 0x7f040027
-        const val telemetry_inside_temp = 0x7f040028
-        const val telemetry_outside_temp = 0x7f040029
-        const val telemetry_battery_temp = 0x7f04002a
-        const val telemetry_12v = 0x7f04002b
-        const val telemetry_tpms = 0x7f04002c
-        const val telemetry_charging = 0x7f04002d
+        val telemetry_soc = R.string.telemetry_soc
+        val telemetry_range = R.string.telemetry_range
+        val telemetry_inside_temp = R.string.telemetry_inside_temp
+        val telemetry_outside_temp = R.string.telemetry_outside_temp
+        val telemetry_battery_temp = R.string.telemetry_battery_temp
+        val telemetry_12v = R.string.telemetry_12v
+        val telemetry_tpms = R.string.telemetry_tpms
+        val telemetry_charging = R.string.telemetry_charging
 
-        const val confirm_action = 0x7f04002e
-        const val action_cancelled = 0x7f04002f
-        const val llm_thinking = 0x7f040030
-        const val llm_error = 0x7f040031
-        const val llm_offline = 0x7f040032
+        val confirm_action = R.string.confirm_action
+        val action_cancelled = R.string.action_cancelled
+        val llm_thinking = R.string.llm_thinking
+        val llm_error = R.string.llm_error
+        val llm_offline = R.string.llm_offline
     }
 }

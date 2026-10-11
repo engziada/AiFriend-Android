@@ -62,14 +62,33 @@ class AdbTransport(
             dataIn = DataInputStream(socket?.getInputStream()!!)
             PilotLogger.i(TAG, "TCP socket connected")
 
-            if (!handshake()) {
-                PilotLogger.e(TAG, "ADB handshake failed")
-                return false
+            sendCnxn()
+            val hello = readPacket()
+            PilotLogger.i(TAG, "Handshake response cmd=${cmdName(hello.cmd)}")
+            when (hello.cmd) {
+                CMD_CNXN -> PilotLogger.i(TAG, "CNXN received directly")
+                CMD_AUTH -> {
+                    PilotLogger.i(TAG, "Server requested authentication")
+                    if (!authenticate(hello)) {
+                        PilotLogger.e(TAG, "ADB authentication failed")
+                        return false
+                    }
+                }
+                CMD_STLS -> {
+                    sendPacket(CMD_STLS, 0x01000000, 0, ByteArray(0))
+                    val result2 = readPacket()
+                    PilotLogger.i(TAG, "STLS response cmd=${cmdName(result2.cmd)}")
+                    if (result2.cmd != CMD_CNXN) {
+                        PilotLogger.e(TAG, "Expected CNXN after STLS, got ${cmdName(result2.cmd)}")
+                        return false
+                    }
+                }
+                else -> {
+                    PilotLogger.e(TAG, "Unexpected handshake packet ${cmdName(hello.cmd)}")
+                    return false
+                }
             }
-            if (!authenticate()) {
-                PilotLogger.e(TAG, "ADB authentication failed")
-                return false
-            }
+
             PilotLogger.i(TAG, "ADB connected and authenticated")
             return true
         } catch (e: Exception) {
@@ -112,28 +131,17 @@ class AdbTransport(
         }
     }
 
-    private fun handshake(): Boolean {
+    private fun sendCnxn() {
         val banner = "host::features=shell_v2,cmd\u0000".toByteArray(Charsets.UTF_8)
         sendPacket(CMD_CNXN, 0x01000001, MAX_PAYLOAD, banner)
-
-        val result = readPacket()
-        PilotLogger.i(TAG, "Handshake response cmd=${cmdName(result.cmd)}")
-        return when (result.cmd) {
-            CMD_CNXN -> true
-            CMD_STLS -> {
-                sendPacket(CMD_STLS, 0x01000000, 0, ByteArray(0))
-                val result2 = readPacket()
-                PilotLogger.i(TAG, "STLS response cmd=${cmdName(result2.cmd)}")
-                result2.cmd == CMD_CNXN
-            }
-            else -> false
-        }
     }
 
-    private fun authenticate(): Boolean {
+    private fun authenticate(initial: AdbPacket? = null): Boolean {
         var attempts = 0
+        var pending: AdbPacket? = initial
         while (attempts < 5) {
-            val result = readPacket()
+            val result = pending ?: readPacket()
+            pending = null
             PilotLogger.i(TAG, "Auth packet cmd=${cmdName(result.cmd)} arg0=${result.arg0}")
             when (result.cmd) {
                 CMD_AUTH -> {
@@ -146,7 +154,7 @@ class AdbTransport(
                         }
                         AUTH_SIGNATURE -> {
                             PilotLogger.i(TAG, "AUTH_SIGNATURE accepted")
-                            return true
+                            // Server accepted signature; wait for CNXN.
                         }
                         AUTH_RSAPUBLICKEY -> {
                             val pubKeyBlob = buildPublicKeyBlob()

@@ -23,6 +23,13 @@
   - ASR-only fallback: voice commands still work even if TTS model is missing.
   - Fixed ADB authentication branch and added per-step diagnostics.
   - Added BYD connection retry loop.
+- **v0.2.2 fixes**:
+  - Fixed `StringRes` to use `R.string.*` references (resolves `String resource ID #0x7f040031` crash).
+  - Fixed TTS model validation threshold (Piper `tokens.txt` is only 954 bytes, below old 1KB minimum).
+  - Fixed ADB handshake: server now sends `AUTH` as first response; we accept it and authenticate.
+  - Added local greeting responses so "hi/hello/أهلاً" work without internet.
+  - Major UI cleanup: log panel is now a hidden slide-in overlay, main screen has more space, quick action chips are at the bottom.
+  - Added direct vehicle action chips and an ADB shell test chip to isolate connection issues.
 
 ### Phase 0: Workspace Setup
 - Gradle 8.13 wrapper, JDK 21 configured

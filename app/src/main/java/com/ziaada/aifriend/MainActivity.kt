@@ -9,9 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,10 +33,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Brightness7
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -149,7 +150,7 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit, onStop: 
     val modelStatus by viewModel.modelStatus.collectAsStateWithLifecycle()
     val hasOpenRouterKey by viewModel.hasOpenRouterKey.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
-    var showPanel by remember { mutableStateOf(true) }
+    var showPanel by remember { mutableStateOf(false) }
     var highContrast by remember { mutableStateOf(false) }
 
     val bgGradient = if (highContrast) {
@@ -161,43 +162,56 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit, onStop: 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(bgGradient),
+            .background(bgGradient)
+            .padding(16.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(10.dp)
-                .animateContentSize(),
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (showPanel) {
-                PilotPanel(
-                    viewModel = viewModel,
-                    highContrast = highContrast,
-                    onClosePanel = { showPanel = false },
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(0.40f)
-                        .padding(end = 8.dp),
-                )
-            }
-            MainContentArea(
+            StatusBar(
+                bydState = bydState,
+                voiceState = voiceState,
+                modelStatus = modelStatus,
+                highContrast = highContrast,
+                onTogglePanel = { showPanel = !showPanel },
+                onToggleContrast = { highContrast = !highContrast },
+                onShowSettings = { showSettings = true },
+            )
+
+            AiFace(
+                state = state.faceState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1.2f)
+                    .padding(vertical = 8.dp),
+            )
+
+            BottomSection(
                 viewModel = viewModel,
                 state = state,
                 voiceState = voiceState,
                 voiceError = voiceError,
-                bydState = bydState,
-                modelStatus = modelStatus,
                 highContrast = highContrast,
-                panelVisible = showPanel,
                 onMic = onMic,
                 onStop = onStop,
-                onTogglePanel = { showPanel = !showPanel },
-                onToggleContrast = { highContrast = !highContrast },
-                onShowSettings = { showSettings = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.9f),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showPanel,
+            modifier = Modifier.align(Alignment.CenterEnd),
+        ) {
+            PilotPanel(
+                viewModel = viewModel,
+                highContrast = highContrast,
+                onClosePanel = { showPanel = false },
                 modifier = Modifier
                     .fillMaxHeight()
-                    .weight(if (showPanel) 0.60f else 1f)
-                    .padding(start = if (showPanel) 8.dp else 0.dp),
+                    .fillMaxWidth(0.48f),
             )
         }
     }
@@ -213,117 +227,86 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit, onStop: 
 }
 
 @Composable
-private fun MainContentArea(
+private fun BottomSection(
     viewModel: MainViewModel,
     state: com.ziaada.aifriend.domain.AiFriendUiState,
     voiceState: VoiceManager.VoiceState,
     voiceError: String?,
-    bydState: BydConnectionState,
-    modelStatus: ModelManager.ModelStatus,
     highContrast: Boolean,
-    panelVisible: Boolean,
     onMic: () -> Unit,
     onStop: () -> Unit,
-    onTogglePanel: () -> Unit,
-    onToggleContrast: () -> Unit,
-    onShowSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val captionBg = if (highContrast) Color(0xFF1A3E55) else Color(0xFF132A3A)
+    val captionTextSize = if (highContrast) 23.sp else 21.sp
+    val msgTextSize = if (highContrast) 16.sp else 14.sp
+
     Column(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly,
     ) {
-        StatusBar(
-            bydState = bydState,
-            voiceState = voiceState,
-            modelStatus = modelStatus,
-            panelVisible = panelVisible,
-            highContrast = highContrast,
-            onTogglePanel = onTogglePanel,
-            onToggleContrast = onToggleContrast,
-            onShowSettings = onShowSettings,
-        )
-
-        AiFace(
-            state = state.faceState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(vertical = 6.dp),
-        )
-
         BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.95f)
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
         ) {
-            val buttonSize = (maxHeight * 0.48f).coerceIn(124.dp, 188.dp)
-            val captionBg = if (highContrast) Color(0xFF1A3E55) else Color(0xFF132A3A)
-            val captionTextSize = if (highContrast) 22.sp else 20.sp
-            val vehicleTextSize = if (highContrast) 17.sp else 15.sp
-
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceEvenly,
+            val buttonSize = (maxWidth * 0.28f).coerceIn(120.dp, 190.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ListenButton(
-                        state = voiceState,
-                        listening = state.isListening,
-                        buttonSize = buttonSize,
-                        highContrast = highContrast,
-                        onClick = onMic,
-                    )
-                    Spacer(Modifier.width(24.dp))
-                    StopButton(
-                        buttonSize = buttonSize * 0.55f,
-                        highContrast = highContrast,
-                        onClick = onStop,
-                    )
-                }
+                ListenButton(
+                    state = voiceState,
+                    listening = state.isListening,
+                    buttonSize = buttonSize,
+                    highContrast = highContrast,
+                    onClick = onMic,
+                )
+                Spacer(Modifier.width(28.dp))
+                StopButton(
+                    buttonSize = buttonSize * 0.55f,
+                    highContrast = highContrast,
+                    onClick = onStop,
+                )
+            }
+        }
 
-                Column(
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            CaptionBar(
+                speaker = if (voiceError != null) null else state.captionSpeaker,
+                text = voiceError ?: state.caption,
+                background = captionBg,
+                textSize = captionTextSize,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 76.dp, max = 110.dp),
+            )
+            if (state.vehicleMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    color = if (highContrast) Color(0xFF0F3142) else Color(0xFF0B1F2A),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(16.dp),
+                    shadowElevation = 6.dp,
                 ) {
-                    CaptionBar(
-                        speaker = if (voiceError != null) null else state.captionSpeaker,
-                        text = voiceError ?: state.caption,
-                        background = captionBg,
-                        textSize = captionTextSize,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 84.dp, max = 116.dp),
+                    Text(
+                        text = state.vehicleMessage,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                        color = if (highContrast) Color(0xFFFFF59D) else Color(0xFFB6C9CE),
+                        fontSize = msgTextSize,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
                     )
-                    if (state.vehicleMessage.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = if (highContrast) Color(0xFF0F3142) else Color(0xFF0B1F2A),
-                            contentColor = Color.White,
-                            shape = RoundedCornerShape(16.dp),
-                            shadowElevation = 6.dp,
-                        ) {
-                            Text(
-                                text = state.vehicleMessage,
-                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                                color = if (highContrast) Color(0xFFFFF59D) else Color(0xFFB6C9CE),
-                                fontSize = vehicleTextSize,
-                                fontWeight = FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                maxLines = 2,
-                            )
-                        }
-                    }
                 }
             }
         }
+
+        QuickChipsRow(viewModel = viewModel, highContrast = highContrast)
     }
 }
 
@@ -332,7 +315,6 @@ private fun StatusBar(
     bydState: BydConnectionState,
     voiceState: VoiceManager.VoiceState,
     modelStatus: ModelManager.ModelStatus,
-    panelVisible: Boolean,
     highContrast: Boolean,
     onTogglePanel: () -> Unit,
     onToggleContrast: () -> Unit,
@@ -375,27 +357,27 @@ private fun StatusBar(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp),
+            .height(56.dp),
         color = chipBg,
         contentColor = Color.White,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         shadowElevation = 8.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 StatusChip(text = "سيارة: $bydText", color = bydColor, highContrast = highContrast)
                 StatusChip(text = "صوت: $voiceText", color = voiceColor, highContrast = highContrast)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("نماذج: ", color = Color(0xFFB6C9CE), fontSize = 13.sp)
+                    Text("نماذج: ", color = Color(0xFFB6C9CE), fontSize = 14.sp)
                     IndicatorDot(ready = modelStatus.asrReady, label = "تعرف", highContrast = highContrast)
                     Spacer(Modifier.width(6.dp))
                     IndicatorDot(ready = modelStatus.ttsReady, label = "كلام", highContrast = highContrast)
@@ -403,25 +385,25 @@ private fun StatusBar(
             }
 
             Row {
-                IconButton(onClick = onToggleContrast, modifier = Modifier.size(38.dp)) {
+                IconButton(onClick = onToggleContrast, modifier = Modifier.size(42.dp)) {
                     Icon(
                         Icons.Default.Brightness7,
-                        contentDescription = "تباين عالي",
-                        tint = if (highContrast) Color(0xFFFFF59D) else Color.White.copy(alpha = 0.8f),
+                        contentDescription = "تباين",
+                        tint = if (highContrast) Color(0xFFFFF59D) else Color.White.copy(alpha = 0.85f),
                     )
                 }
-                IconButton(onClick = onTogglePanel, modifier = Modifier.size(38.dp)) {
+                IconButton(onClick = onTogglePanel, modifier = Modifier.size(42.dp)) {
                     Icon(
-                        if (panelVisible) Icons.Default.Close else Icons.Default.Menu,
-                        contentDescription = "إظهار/إخفاء السجل",
-                        tint = Color.White.copy(alpha = 0.8f),
+                        if (onTogglePanel.hashCode() == 0) Icons.Default.Close else Icons.Default.Menu,
+                        contentDescription = "سجل",
+                        tint = Color.White.copy(alpha = 0.85f),
                     )
                 }
-                IconButton(onClick = onShowSettings, modifier = Modifier.size(38.dp)) {
+                IconButton(onClick = onShowSettings, modifier = Modifier.size(42.dp)) {
                     Icon(
                         Icons.Default.Settings,
-                        contentDescription = "إعدادات آدم",
-                        tint = Color.White.copy(alpha = 0.8f),
+                        contentDescription = "إعدادات",
+                        tint = Color.White.copy(alpha = 0.85f),
                     )
                 }
             }
@@ -437,9 +419,9 @@ private fun StatusChip(text: String, color: Color, highContrast: Boolean) {
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             color = color,
-            fontSize = if (highContrast) 14.sp else 13.sp,
+            fontSize = if (highContrast) 15.sp else 14.sp,
             fontWeight = FontWeight.SemiBold,
         )
     }
@@ -462,6 +444,39 @@ private fun IndicatorDot(ready: Boolean, label: String, highContrast: Boolean) {
             color = if (ready) Color(0xFF6CE0D1) else Color(0xFFFF8A80),
             fontSize = if (highContrast) 13.sp else 12.sp,
         )
+    }
+}
+
+@Composable
+private fun QuickChipsRow(viewModel: MainViewModel, highContrast: Boolean) {
+    val scroll = rememberScrollState()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scroll)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        QuickChip("استمع", highContrast) { viewModel.beginListening() }
+        QuickChip("تكييف 22°", highContrast) { viewModel.directClimate22() }
+        QuickChip("شباك تهوية", highContrast) { viewModel.directWindowVent() }
+        QuickChip("قفل", highContrast) { viewModel.directLockDoors() }
+        QuickChip("فتح قفل", highContrast) { viewModel.directUnlockDoors() }
+        QuickChip("البطارية", highContrast) { viewModel.directReadSoc() }
+        QuickChip("ADB test", highContrast) { viewModel.directAdbShellTest() }
+        QuickChip("Reconnect", highContrast) { viewModel.reconnectByd() }
+    }
+}
+
+@Composable
+private fun QuickChip(label: String, highContrast: Boolean, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1C3A4A)),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Text(text = label, fontSize = if (highContrast) 15.sp else 14.sp, color = Color.White)
     }
 }
 
@@ -489,10 +504,10 @@ private fun PilotPanel(
     }
 
     Card(
-        modifier = modifier,
+        modifier = modifier.padding(start = 8.dp),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = cardBg),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
     ) {
         Column(
             modifier = Modifier
@@ -553,7 +568,7 @@ private fun PilotPanel(
                     PilotLogger.copyToClipboard(context)
                     clipboard.setText(AnnotatedString("copied"))
                 }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "نسخ السجل", tint = Color.White)
+                    Icon(Icons.Default.ContentCopy, contentDescription = "نسخ", tint = Color.White)
                 }
                 IconButton(onClick = {
                     scope.launch {
@@ -561,10 +576,10 @@ private fun PilotPanel(
                         uri?.let { PilotLogger.share(context, it) }
                     }
                 }) {
-                    Icon(Icons.Default.Share, contentDescription = "مشاركة السجل", tint = Color.White)
+                    Icon(Icons.Default.Share, contentDescription = "مشاركة", tint = Color.White)
                 }
                 IconButton(onClick = { viewModel.clearLogs() }) {
-                    Icon(Icons.Default.Delete, contentDescription = "مسح السجل", tint = Color(0xFFFF8A80))
+                    Icon(Icons.Default.Delete, contentDescription = "مسح", tint = Color(0xFFFF8A80))
                 }
             }
 
@@ -674,7 +689,7 @@ private fun TestChip(label: String, highContrast: Boolean, onClick: () -> Unit) 
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1C3A4A)),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(text = label, fontSize = if (highContrast) 14.sp else 13.sp, color = Color.White)
     }
@@ -694,13 +709,13 @@ private fun ListenButton(
         VoiceManager.VoiceState.LISTENING,
     )
     val label = when (state) {
-        VoiceManager.VoiceState.DOWNLOADING_MODELS -> "تحميل الصوت"
-        VoiceManager.VoiceState.INITIALIZING -> "جاري التجهيز"
-        VoiceManager.VoiceState.LISTENING -> "إيقاف الاستماع"
-        VoiceManager.VoiceState.PROCESSING -> "لحظة واحدة"
-        VoiceManager.VoiceState.SPEAKING -> "المساعد يتكلم"
-        VoiceManager.VoiceState.ERROR -> "إعادة المحاولة"
-        else -> "ابدأ الاستماع"
+        VoiceManager.VoiceState.DOWNLOADING_MODELS -> "تحميل"
+        VoiceManager.VoiceState.INITIALIZING -> "تجهيز"
+        VoiceManager.VoiceState.LISTENING -> "إيقاف"
+        VoiceManager.VoiceState.PROCESSING -> "لحظة"
+        VoiceManager.VoiceState.SPEAKING -> "بيتكلم"
+        VoiceManager.VoiceState.ERROR -> "إعادة"
+        else -> "استمع"
     }
     val bg = when {
         listening -> Color(0xFFFF846F)
@@ -723,11 +738,11 @@ private fun ListenButton(
             Icon(
                 imageVector = if (listening) Icons.Default.Stop else Icons.Default.Mic,
                 contentDescription = null,
-                modifier = Modifier.size(if (highContrast) 50.dp else 46.dp),
+                modifier = Modifier.size(if (highContrast) 52.dp else 48.dp),
             )
             Text(
                 text = label,
-                fontSize = if (highContrast) 20.sp else 18.sp,
+                fontSize = if (highContrast) 22.sp else 20.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
             )
@@ -751,8 +766,8 @@ private fun StopButton(
         ),
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(if (highContrast) 30.dp else 26.dp))
-            Text("إلغاء", fontSize = if (highContrast) 15.sp else 13.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(if (highContrast) 32.dp else 28.dp))
+            Text("إلغاء", fontSize = if (highContrast) 16.sp else 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -780,7 +795,7 @@ private fun CaptionBar(
                 text = when (speaker) {
                     CaptionSpeaker.YOU -> "أنت قلت"
                     CaptionSpeaker.ASSISTANT -> "آدم قال"
-                    null -> "تنبيه صوتي"
+                    null -> "تنبيه"
                 },
                 color = if (speaker == CaptionSpeaker.YOU) Color(0xFF7CE4D7) else Color(0xFF9FCBE0),
                 fontSize = 15.sp,

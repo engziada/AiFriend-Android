@@ -125,4 +125,14 @@ class BydConnectionManager(
     fun isReady(): Boolean {
         return _state.value == BydConnectionState.READY
     }
+
+    /** Sends a raw shell command through ADB if connected; returns output or null. */
+    fun testShell(command: String): String? {
+        return try {
+            adbTransport?.executeCommand(command)?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            PilotLogger.e(TAG, "testShell failed", e)
+            null
+        }
+    }
 }

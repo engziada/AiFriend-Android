@@ -49,10 +49,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             PilotLogger.i("MainViewModel", "initializeVoice() launching")
             val success = voiceManager.initialize()
-            PilotLogger.i("MainViewModel", "initializeVoice() success=$success")
-            if (!success) {
-                // Voice initialization failed, but continue with limited functionality
-            }
+            PilotLogger.i("MainViewModel", "initializeVoice() success=$success asrOnly=${voiceManager.isAsrOnly()}")
         }
     }
 
@@ -200,6 +197,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearLogs() = PilotLogger.clear()
+
+    // ─── Direct vehicle action chips (bypass assistant parser) ─────────────────
+
+    private fun requireConnected(block: suspend () -> String) {
+        if (_bydState.value != BydConnectionState.READY && _bydState.value != BydConnectionState.DEGRADED) {
+            store.update { it.copy(vehicleMessage = "السيارة مش متصلة. جرّب Reconnect أولاً.") }
+            return
+        }
+        viewModelScope.launch {
+            val result = runCatching { block() }.getOrElse { "تعذر التنفيذ: ${it.message}" }
+            store.update { it.copy(vehicleMessage = result, faceState = FaceState.HAPPY) }
+        }
+    }
+
+    fun directClimate22() = requireConnected {
+        vehicleController.setClimatePower(true)
+        vehicleController.setClimateTemperature(22)
+        "ضبطت التكييف على 22 درجة"
+    }
+
+    fun directToggleClimate() = requireConnected {
+        climateEnabled = !climateEnabled
+        vehicleController.setClimatePower(climateEnabled)
+        if (climateEnabled) "شغلت التكييف" else "طفيت التكييف"
+    }
+
+    fun directWindowVent() = requireConnected {
+        vehicleController.setWindowPosition("fl", 15)
+        "فتحت شباك السائق للتهوية"
+    }
+
+    fun directLockDoors() = requireConnected {
+        vehicleController.setDoorLocks(true)
+        "قفلت الأبواب"
+    }
+
+    fun directUnlockDoors() = requireConnected {
+        vehicleController.setDoorLocks(false)
+        "فتحت قفل الأبواب"
+    }
+
+    fun directReadSoc() = requireConnected {
+        val soc = vehicleController.getSocPercent()
+        if (soc != null) "نسبة شحن البطارية $soc٪" else "مش قادر أقرأ نسبة الشحن"
+    }
+
+    fun directAdbShellTest() {
+        viewModelScope.launch {
+            val output = connectionManager.testShell("echo AiFriend_ADB_OK")
+            val message = output?.trim() ?: "ADB shell test failed or not connected"
+            PilotLogger.i("MainViewModel", "ADB shell test output: $message")
+            store.update { it.copy(vehicleMessage = message) }
+        }
+    }
 
     fun adjustClimateTemperature(delta: Int) {
         if (_bydState.value != BydConnectionState.READY && _bydState.value != BydConnectionState.DEGRADED) {

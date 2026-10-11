@@ -12,8 +12,8 @@ android {
         applicationId = "com.ziaada.aifriend"
         minSdk = 32
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1-pilot"
+        versionCode = 4
+        versionName = "0.2.2-pilot"
     }
 
     signingConfigs {

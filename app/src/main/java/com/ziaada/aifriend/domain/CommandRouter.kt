@@ -68,6 +68,10 @@ class CommandRouter(
     suspend fun route(command: String, vehicleConnected: Boolean): String {
         val normalized = normalize(command)
 
+        if (isGreeting(normalized)) {
+            return "أهلاً بيك! أنا آدم، مساعدك الصوتي للعربية. قولّي عايز إيه."
+        }
+
         if (normalized.contains("ساعدني") || normalized.contains("مساعدة") || normalized.contains("الأوامر")) {
             return strings.get(StringRes.help_text)
         }
@@ -148,6 +152,11 @@ class CommandRouter(
     private fun isInformationQuestion(text: String): Boolean = hasAny(
         text, "ازاي", "إزاي", "كيف", "ليه", "لماذا", "هل", "ايه", "إيه", "ما هو", "ما هي", "اشرح",
         "what ", "why ", "how ", "where ", "when ", "is ", "can you", "can i", "tell me", "explain",
+    )
+
+    private fun isGreeting(text: String): Boolean = hasAny(
+        text, "هلا", "هلو", "هاي", "مرحبا", "مرحب", "أهلا", "اهلا", "أهلين", "أهلاً", "سلام", "السلام عليكم",
+        "صباح", "مساء", "خير", "hello", "hi", "hey", "good morning", "good evening",
     )
 
     private fun hasAny(text: String, vararg values: String): Boolean = values.any(text::contains)

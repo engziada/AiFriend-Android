@@ -52,7 +52,7 @@ class ModelManager(context: Context) {
         private const val CONNECT_TIMEOUT_MS = 20_000
         private const val READ_TIMEOUT_MS = 300_000
         private const val MIN_ARCHIVE_BYTES = 1_000_000L
-        private const val MIN_MODEL_FILE_BYTES = 1_024L
+        private const val MIN_MODEL_FILE_BYTES = 100L
         private const val DOWNLOAD_RETRIES = 3
         private const val RETRY_DELAY_MS = 1_500L
     }
