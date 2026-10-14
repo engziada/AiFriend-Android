@@ -2,10 +2,10 @@ package com.ziaada.aifriend.domain
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.ziaada.aifriend.pilot.PilotLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -34,20 +34,29 @@ class OpenRouterLlm(
 
     private val systemPrompt = AssistantPersona.SYSTEM_PROMPT
 
+    private var cachedFreeModel: String? = null
+
     override suspend fun query(prompt: String, vehicleConnected: Boolean): String {
         val apiKey = prefs.getString("openrouter_key", "")?.takeIf { it.isNotBlank() }
-            ?: return "أنا آدم. الأسئلة العامة محتاجة مفتاح OpenRouter من زر الإعدادات. أوامر السيارة وفتح التطبيقات المعروفة بتشتغل محلياً."
+        if (apiKey == null) {
+            PilotLogger.w(TAG, "No OpenRouter API key configured")
+            return "أنا آدم. الأسئلة العامة محتاجة مفتاح OpenRouter من زر الإعدادات. أوامر السيارة وفتح التطبيقات المعروفة بتشتغل محلياً."
+        }
+        PilotLogger.i(TAG, "OpenRouter query: '$prompt' (key present, length=${apiKey.length})")
+
+        val model = pickFreeModel(apiKey)
+        PilotLogger.i(TAG, "Using free model: $model")
 
         return withContext(Dispatchers.IO) {
             try {
                 val requestBody = JsonObject().apply {
-                    addProperty("model", "openai/gpt-4o-mini")
+                    addProperty("model", model)
                     add("messages", gson.toJsonTree(listOf(
                         mapOf("role" to "system", "content" to systemPrompt),
                         mapOf("role" to "user", "content" to prompt)
                     )))
                     addProperty("temperature", 0.3)
-                    addProperty("max_tokens", 200)
+                    addProperty("max_tokens", 300)
                     add("tools", gson.toJsonTree(buildTools()))
                     addProperty("tool_choice", "auto")
                 }
@@ -62,12 +71,19 @@ class OpenRouterLlm(
                     .build()
 
                 client.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: "{}"
                     if (!response.isSuccessful) {
-                        Log.w(TAG, "OpenRouter error: ${response.code} ${response.body?.string()}")
-                        return@withContext strings.get(StringRes.llm_error)
+                        PilotLogger.e(TAG, "OpenRouter HTTP ${response.code}: ${body.take(300)}")
+                        return@withContext when (response.code) {
+                            401 -> "مفتاح OpenRouter غير صحيح. راجع زر الإعدادات."
+                            402 -> "مفيش رصيد كافي على OpenRouter."
+                            429 -> "النماذج المجانية مشغولة دلوقتي، جرّب بعد شوية."
+                            else -> "خدمة الذكاء الاصطناعي ردّت بخطأ (HTTP ${response.code})."
+                        }
                     }
 
-                    val json = JsonParser.parseString(response.body?.string() ?: "{}").asJsonObject
+                    val json = runCatching { JsonParser.parseString(body).asJsonObject }.getOrNull()
+                        ?: return@withContext strings.get(StringRes.llm_error)
                     val choice = json.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject
                         ?: return@withContext strings.get(StringRes.llm_error)
                     val message = choice.getAsJsonObject("message")
@@ -82,13 +98,54 @@ class OpenRouterLlm(
                     else "أنا آدم، ما وصلنيش رد واضح. ممكن تعيد السؤال؟"
                 }
             } catch (e: IOException) {
-                Log.e(TAG, "Network error", e)
-                return@withContext strings.get(StringRes.llm_error)
+                PilotLogger.e(TAG, "OpenRouter network error (no internet?)", e)
+                return@withContext "مفيش اتصال بالإنترنت حالياً؛ مش قادر أوصل لخدمة الذكاء الاصطناعي."
             } catch (e: Exception) {
-                Log.e(TAG, "LLM error", e)
+                PilotLogger.e(TAG, "OpenRouter error", e)
                 return@withContext strings.get(StringRes.llm_error)
             }
         }
+    }
+
+    /** Picks a zero-cost model from OpenRouter's /models endpoint, preferring major providers. */
+    private fun pickFreeModel(apiKey: String): String {
+        cachedFreeModel?.let { return it }
+        try {
+            val request = Request.Builder().url("https://openrouter.ai/api/v1/models").get().build()
+            client.newBuilder()
+                .readTimeout(10, TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .build()
+                .newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val data = runCatching {
+                            JsonParser.parseString(response.body?.string() ?: "{}").asJsonObject.getAsJsonArray("data")
+                        }.getOrNull() ?: com.google.gson.JsonArray()
+                        val free = data.mapNotNull { el ->
+                            val m = el.asJsonObject
+                            val pricing = m.getAsJsonObject("pricing") ?: return@mapNotNull null
+                            val promptPrice = pricing.get("prompt")?.asString?.toDoubleOrNull() ?: return@mapNotNull null
+                            val completionPrice = pricing.get("completion")?.asString?.toDoubleOrNull() ?: return@mapNotNull null
+                            if (promptPrice == 0.0 && completionPrice == 0.0) m.get("id")?.asString else null
+                        }
+                        val preferred = listOf("deepseek", "meta-llama", "qwen", "google", "mistralai", "microsoft")
+                        val chosen = preferred.flatMap { p -> free.filter { it.startsWith("$p/") } }.firstOrNull()
+                            ?: free.firstOrNull()
+                        if (chosen != null) {
+                            cachedFreeModel = chosen
+                            PilotLogger.i(TAG, "Picked free model '$chosen' (${free.size} free models available)")
+                            return chosen
+                        }
+                    } else {
+                        PilotLogger.w(TAG, "Models endpoint returned HTTP ${response.code}")
+                    }
+                }
+        } catch (e: Exception) {
+            PilotLogger.w(TAG, "Failed to fetch free models list: ${e.message}")
+        }
+        val fallback = "deepseek/deepseek-chat-v3-0324:free"
+        PilotLogger.w(TAG, "Falling back to '$fallback'")
+        return fallback
     }
 
     private fun buildTools(): List<Map<String, Any>> {
@@ -269,7 +326,7 @@ class OpenRouterLlm(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Tool execution failed", e)
+                PilotLogger.e(TAG, "Tool execution failed", e)
                 "ما قدرتش أنفذ الأمر: ${e.message ?: "حصل خطأ في خدمة السيارة"}"
             }
             results.add(result)
@@ -418,8 +475,13 @@ class OpenRouterLlm(
     private fun JsonObject.booleanOrNull(name: String): Boolean? = get(name)?.takeUnless { it.isJsonNull }?.asBoolean
 
     fun setApiKey(key: String) {
-        if (key.isBlank()) prefs.edit().remove("openrouter_key").apply()
-        else prefs.edit().putString("openrouter_key", key.trim()).apply()
+        if (key.isBlank()) {
+            prefs.edit().remove("openrouter_key").apply()
+            PilotLogger.i(TAG, "OpenRouter API key cleared")
+        } else {
+            prefs.edit().putString("openrouter_key", key.trim()).apply()
+            PilotLogger.i(TAG, "OpenRouter API key saved (length=${key.trim().length})")
+        }
     }
 
     fun hasApiKey(): Boolean = !prefs.getString("openrouter_key", "").isNullOrBlank()

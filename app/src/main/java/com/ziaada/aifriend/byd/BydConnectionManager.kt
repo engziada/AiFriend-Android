@@ -73,13 +73,35 @@ class BydConnectionManager(
         adbTransport?.disconnect()
     }
 
+    /**
+     * Revokes the current ADB authorization: stops the connection and deletes the locally
+     * stored RSA key pair, so the next connect re-triggers the head unit's
+     * "Allow USB debugging?" prompt.
+     */
+    fun revoke() {
+        stop()
+        runCatching {
+            val keyDir = context.getDir("adb_keys", Context.MODE_PRIVATE)
+            keyDir.listFiles()?.forEach { it.delete() }
+            PilotLogger.i(TAG, "ADB authorization revoked (local keys cleared)")
+        }.onFailure { PilotLogger.e(TAG, "Failed to clear ADB keys: ${it.message}") }
+        adbTransport = null
+        autoserviceClient = null
+        fidCatalogManager = null
+        _vehicleController = null
+        updateState(BydConnectionState.DISCONNECTED)
+    }
+
     val vehicleController: BydVehicleController?
         get() = _vehicleController
 
     private suspend fun connect(): Boolean {
         updateState(BydConnectionState.ADB_CONNECTING)
 
-        adbTransport = AdbTransport(context)
+        val host = AdbConfig.getHost(context)
+        val port = AdbConfig.getPort(context)
+        PilotLogger.i(TAG, "Connecting via ADB to $host:$port")
+        adbTransport = AdbTransport(context, host, port)
         if (!adbTransport!!.connect()) {
             updateState(BydConnectionState.ERROR)
             return false

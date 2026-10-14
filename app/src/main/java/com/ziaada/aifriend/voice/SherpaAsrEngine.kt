@@ -5,6 +5,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.ziaada.aifriend.pilot.PilotLogger
 import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
@@ -29,6 +30,8 @@ class SherpaAsrEngine {
         fun onPartial(text: String)
         fun onFinal(text: String)
         fun onError(message: String)
+        /** Live microphone RMS level (0f..1f+) reported while listening, for UI metering. */
+        fun onLevel(level: Float) {}
     }
 
     fun setListener(listener: Listener) { this.listener = listener }
@@ -97,10 +100,18 @@ class SherpaAsrEngine {
         var speechStarted = false
         var quietMs = 0
         var noSpeechMs = 0
+        var elapsedMs = 0
+
+        // Adaptive noise floor: track the quietest RMS observed so a low-gain car mic
+        // still crosses the speech threshold. Calibrated during the first CALIBRATION_MS.
+        var noiseFloor = Double.MAX_VALUE
+        var peakRms = 0.0
+        var lastLogMs = 0
 
         try {
             recorder.startRecording()
             if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) error("Microphone did not start")
+            PilotLogger.i(TAG, "Microphone recording started (source adaptive, rate=$SAMPLE_RATE)")
 
             while (isRunning && samples.size < SAMPLE_RATE * MAX_UTTERANCE_SECONDS) {
                 val count = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
@@ -117,10 +128,33 @@ class SherpaAsrEngine {
                     energy += sample * sample
                 }
                 val chunkMs = count * 1000 / SAMPLE_RATE
+                elapsedMs += chunkMs
                 val rms = sqrt(energy / count)
-                if (rms >= SPEECH_RMS_THRESHOLD) {
+                if (rms > peakRms) peakRms = rms
+
+                // Report a smoothed level to the UI (scaled so typical speech ~0.3-1.0).
+                listener?.onLevel((rms * LEVEL_UI_SCALE).toFloat().coerceIn(0f, 1.5f))
+
+                if (elapsedMs <= CALIBRATION_MS) {
+                    if (rms < noiseFloor) noiseFloor = rms
+                }
+                val threshold = speechThreshold(noiseFloor, elapsedMs)
+
+                if (elapsedMs - lastLogMs >= 500) {
+                    lastLogMs = elapsedMs
+                    PilotLogger.d(
+                        TAG,
+                        "mic rms=${"%.4f".format(rms)} peak=${"%.4f".format(peakRms)} " +
+                            "floor=${if (noiseFloor == Double.MAX_VALUE) "n/a" else "%.4f".format(noiseFloor)} " +
+                            "thr=${"%.4f".format(threshold)} speech=$speechStarted elapsed=${elapsedMs}ms",
+                    )
+                }
+
+                if (rms >= threshold) {
+                    if (!speechStarted) PilotLogger.i(TAG, "Speech detected at ${elapsedMs}ms (rms=${"%.4f".format(rms)} >= thr=${"%.4f".format(threshold)})")
                     speechStarted = true
                     quietMs = 0
+                    noSpeechMs = 0
                 } else if (speechStarted) {
                     quietMs += chunkMs
                 } else {
@@ -132,31 +166,58 @@ class SherpaAsrEngine {
             }
         } catch (e: Exception) {
             if (isRunning) {
+                PilotLogger.e(TAG, "Microphone capture failed: ${e.message}")
                 Log.e(TAG, "Microphone capture failed", e)
                 listener?.onError("Microphone capture failed: ${e.message}")
                 isRunning = false
+                listener?.onLevel(0f)
                 return
             }
         } finally {
             releaseRecorder(recorder)
             isRunning = false
+            listener?.onLevel(0f)
         }
 
+        PilotLogger.i(
+            TAG,
+            "Capture ended: speechStarted=$speechStarted samples=${samples.size} peakRms=${"%.4f".format(peakRms)} elapsed=${elapsedMs}ms",
+        )
         if (speechStarted && samples.size >= MIN_UTTERANCE_SAMPLES) {
             decode(samples.toFloatArray())
         } else {
+            if (!speechStarted) {
+                PilotLogger.w(
+                    TAG,
+                    "No speech detected (peak rms=${"%.4f".format(peakRms)}). Mic gain too low or mic held by another app?",
+                )
+            }
             listener?.onFinal("")
         }
     }
 
+    /** Speech RMS threshold: adaptive once the noise floor is calibrated, else a safe default. */
+    private fun speechThreshold(noiseFloor: Double, elapsedMs: Int): Double {
+        if (elapsedMs <= CALIBRATION_MS || noiseFloor == Double.MAX_VALUE) return SPEECH_RMS_THRESHOLD
+        // Require clear separation above ambient noise, but never below an absolute floor.
+        return maxOf(SPEECH_RMS_MIN, noiseFloor * NOISE_FLOOR_MULTIPLIER)
+    }
+
     private suspend fun decode(samples: FloatArray) = withContext(Dispatchers.IO) {
-        val currentRecognizer = recognizer ?: return@withContext
+        val currentRecognizer = recognizer ?: run {
+            PilotLogger.e(TAG, "decode() called but recognizer is null")
+            listener?.onFinal("")
+            return@withContext
+        }
         val stream = currentRecognizer.createStream()
         try {
             stream.acceptWaveform(samples, sampleRate = SAMPLE_RATE)
             currentRecognizer.decode(stream)
-            listener?.onFinal(currentRecognizer.getResult(stream).text.trim())
+            val text = currentRecognizer.getResult(stream).text.trim()
+            PilotLogger.i(TAG, "ASR decoded ${samples.size} samples (${samples.size / SAMPLE_RATE}s) -> '$text'")
+            listener?.onFinal(text)
         } catch (e: Exception) {
+            PilotLogger.e(TAG, "Offline transcription failed: ${e.message}")
             Log.e(TAG, "Offline transcription failed", e)
             listener?.onError("Offline transcription failed: ${e.message}")
         } finally {
@@ -202,5 +263,9 @@ class SherpaAsrEngine {
         private const val NO_SPEECH_TIMEOUT_MS = 5_000
         private const val MIN_UTTERANCE_SAMPLES = 1_600
         private const val SPEECH_RMS_THRESHOLD = 0.012
+        private const val CALIBRATION_MS = 500
+        private const val SPEECH_RMS_MIN = 0.004
+        private const val NOISE_FLOOR_MULTIPLIER = 2.8
+        private const val LEVEL_UI_SCALE = 6.0
     }
 }

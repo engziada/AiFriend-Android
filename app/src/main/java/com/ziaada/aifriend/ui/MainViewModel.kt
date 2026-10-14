@@ -3,6 +3,7 @@ package com.ziaada.aifriend.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.ziaada.aifriend.byd.AdbConfig
 import com.ziaada.aifriend.byd.BydConnectionManager
 import com.ziaada.aifriend.byd.BydConnectionState
 import com.ziaada.aifriend.byd.BydVehicleController
@@ -32,7 +33,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val voiceDownloadProgress = voiceManager.downloadProgress
     val voiceError = voiceManager.errorMessage
     val modelStatus = voiceManager.modelStatus
+    val micLevel = voiceManager.micLevel
     val logs = PilotLogger.logs
+
+    private val _adbHost = MutableStateFlow(AdbConfig.getHost(getApplication()))
+    val adbHost = _adbHost.asStateFlow()
+    private val _adbPort = MutableStateFlow(AdbConfig.getPort(getApplication()))
+    val adbPort = _adbPort.asStateFlow()
     private val _hasOpenRouterKey = MutableStateFlow(assistant.hasLlmKey())
     val hasOpenRouterKey = _hasOpenRouterKey.asStateFlow()
     private var climateEnabled = false
@@ -194,6 +201,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         PilotLogger.i("MainViewModel", "Pilot: reconnect BYD requested")
         connectionManager.stop()
         connectionManager.start()
+    }
+
+    /** Persists a new ADB host/port and reconnects using it. Returns false if the port is invalid. */
+    fun setAdbEndpoint(host: String, port: Int): Boolean {
+        if (!AdbConfig.isValidPort(port)) {
+            PilotLogger.w("MainViewModel", "Rejected invalid ADB port: $port")
+            return false
+        }
+        val trimmedHost = host.trim().ifBlank { _adbHost.value }
+        AdbConfig.setEndpoint(getApplication(), trimmedHost, port)
+        _adbHost.value = AdbConfig.getHost(getApplication())
+        _adbPort.value = AdbConfig.getPort(getApplication())
+        PilotLogger.i("MainViewModel", "ADB endpoint set to ${_adbHost.value}:${_adbPort.value}; reconnecting")
+        reconnectByd()
+        return true
+    }
+
+    /** Revokes ADB authorization (clears local keys) and drops the connection. */
+    fun revokeAdb() {
+        PilotLogger.i("MainViewModel", "ADB revoke requested")
+        connectionManager.revoke()
+        _bydState.value = BydConnectionState.DISCONNECTED
     }
 
     fun clearLogs() = PilotLogger.clear()

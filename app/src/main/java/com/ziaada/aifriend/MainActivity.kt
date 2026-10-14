@@ -13,6 +13,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -78,6 +80,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -90,7 +93,7 @@ import com.ziaada.aifriend.byd.BydConnectionState
 import com.ziaada.aifriend.domain.CaptionSpeaker
 import com.ziaada.aifriend.pilot.PilotLogger
 import com.ziaada.aifriend.ui.MainViewModel
-import com.ziaada.aifriend.ui.face.AiFace
+import com.ziaada.aifriend.ui.face.VoiceOrb
 import com.ziaada.aifriend.ui.theme.AiFriendTheme
 import com.ziaada.aifriend.voice.ModelManager
 import com.ziaada.aifriend.voice.VoiceManager
@@ -149,6 +152,9 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit, onStop: 
     val bydState by viewModel.bydState.collectAsStateWithLifecycle()
     val modelStatus by viewModel.modelStatus.collectAsStateWithLifecycle()
     val hasOpenRouterKey by viewModel.hasOpenRouterKey.collectAsStateWithLifecycle()
+    val micLevel by viewModel.micLevel.collectAsStateWithLifecycle()
+    val adbHost by viewModel.adbHost.collectAsStateWithLifecycle()
+    val adbPort by viewModel.adbPort.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
     var showPanel by remember { mutableStateOf(false) }
     var highContrast by remember { mutableStateOf(false) }
@@ -179,8 +185,9 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit, onStop: 
                 onShowSettings = { showSettings = true },
             )
 
-            AiFace(
+            VoiceOrb(
                 state = state.faceState,
+                level = micLevel,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1.2f)
@@ -219,8 +226,20 @@ private fun AiFriendScreen(viewModel: MainViewModel, onMic: () -> Unit, onStop: 
     if (showSettings) {
         SettingsDialog(
             hasOpenRouterKey = hasOpenRouterKey,
+            adbHost = adbHost,
+            adbPort = adbPort,
+            bydStateLabel = when (bydState) {
+                com.ziaada.aifriend.byd.BydConnectionState.READY -> "متصل"
+                com.ziaada.aifriend.byd.BydConnectionState.DEGRADED -> "متصل (محدود)"
+                com.ziaada.aifriend.byd.BydConnectionState.DISCONNECTED -> "غير متصل"
+                com.ziaada.aifriend.byd.BydConnectionState.ERROR -> "خطأ في الاتصال"
+                else -> "جارٍ الاتصال…"
+            },
             onSaveKey = { viewModel.saveOpenRouterKey(it) },
             onClearKey = { viewModel.clearOpenRouterKey() },
+            onApplyAdb = { host, port -> viewModel.setAdbEndpoint(host, port) },
+            onReconnectAdb = { viewModel.reconnectByd() },
+            onRevokeAdb = { viewModel.revokeAdb() },
             onDismiss = { showSettings = false },
         )
     }
@@ -817,17 +836,28 @@ private fun CaptionBar(
 @Composable
 private fun SettingsDialog(
     hasOpenRouterKey: Boolean,
+    adbHost: String,
+    adbPort: Int,
+    bydStateLabel: String,
     onSaveKey: (String) -> Unit,
     onClearKey: () -> Unit,
+    onApplyAdb: (String, Int) -> Boolean,
+    onReconnectAdb: () -> Unit,
+    onRevokeAdb: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
     var keyInput by remember { mutableStateOf("") }
+    var hostInput by remember { mutableStateOf(adbHost) }
+    var portInput by remember { mutableStateOf(adbPort.toString()) }
+    var portError by remember { mutableStateOf<String?>(null) }
+    var showAdbConfirm by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("إعدادات آدم") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("أوامر السيارة وفتح التطبيقات المعروفة تعمل محلياً. الطلبات التي تحتاج فهماً أوسع والأسئلة العامة تُرسل إلى OpenRouter، وتحتاج مفتاحاً واتصالاً بالإنترنت.")
                 OutlinedTextField(
                     value = keyInput,
@@ -849,6 +879,50 @@ private fun SettingsDialog(
                     color = Color(0xFF176C83),
                     fontSize = 14.sp,
                 )
+
+                HorizontalDivider(Modifier.padding(vertical = 14.dp), color = Color(0xFF2A4658))
+
+                Text("اتصال ADB بالسيارة", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("الحالة: $bydStateLabel", color = Color(0xFF6CE0D1), fontSize = 14.sp)
+                OutlinedTextField(
+                    value = hostInput,
+                    onValueChange = { hostInput = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    label = { Text("العنوان (Host)") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = portInput,
+                    onValueChange = { portInput = it.filter(Char::isDigit).take(5) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    label = { Text("المنفذ (Port)") },
+                    singleLine = true,
+                    isError = portError != null,
+                    supportingText = portError?.let { { Text(it, color = Color(0xFFFF8A80)) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            val p = portInput.toIntOrNull()
+                            if (p == null || p !in 1..65535) portError = "منفذ غير صحيح (1-65535)"
+                            else { portError = null; showAdbConfirm = true }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176C83)),
+                    ) { Text("طلب اتصال") }
+                    Button(
+                        onClick = onReconnectAdb,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3A5A6B)),
+                    ) { Text("إعادة اتصال") }
+                }
+                TextButton(
+                    onClick = onRevokeAdb,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                ) { Text("إلغاء التفويض ومسح المفتاح (Revoke)", color = Color(0xFFFF8A80)) }
             }
         },
         confirmButton = {
@@ -864,4 +938,29 @@ private fun SettingsDialog(
             }) { Text(if (hasOpenRouterKey) "مسح المفتاح" else "إغلاق") }
         },
     )
+
+    if (showAdbConfirm) {
+        AlertDialog(
+            onDismissRequest = { showAdbConfirm = false },
+            title = { Text("طلب اتصال ADB") },
+            text = {
+                Text("سيتم طلب الاتصال بـ $hostInput:$portInput.\n\nقد تظهر على شاشة السيارة رسالة \"Allow USB debugging?\" — وافق عليها للسماح لآدم بالتحكم في وظائف السيارة.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val p = portInput.toIntOrNull()
+                    if (p == null || p !in 1..65535) {
+                        portError = "منفذ غير صحيح (1-65535)"
+                    } else {
+                        portError = null
+                        onApplyAdb(hostInput, p)
+                    }
+                    showAdbConfirm = false
+                }) { Text("اتصال") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAdbConfirm = false }) { Text("إلغاء") }
+            },
+        )
+    }
 }

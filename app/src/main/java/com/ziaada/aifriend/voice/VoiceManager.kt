@@ -12,6 +12,7 @@ class VoiceManager(application: Application) {
     private val modelManager = ModelManager(application)
     private val asrEngine = SherpaAsrEngine()
     private val ttsEngine = SherpaTtsEngine()
+    private val onlineTts = OnlineTtsEngine()
 
     private val _state = MutableStateFlow(VoiceState.IDLE)
     val state = _state.asStateFlow()
@@ -21,6 +22,9 @@ class VoiceManager(application: Application) {
     val downloadProgress = _downloadProgress.asStateFlow()
     private val _modelStatus = MutableStateFlow(modelManager.status())
     val modelStatus = _modelStatus.asStateFlow()
+    private val _micLevel = MutableStateFlow(0f)
+    /** Live microphone level (0f..~1.5f) while listening, for the UI meter. */
+    val micLevel = _micLevel.asStateFlow()
 
     enum class VoiceState { IDLE, DOWNLOADING_MODELS, INITIALIZING, READY, LISTENING, PROCESSING, SPEAKING, ERROR }
     data class DownloadProgress(val current: Int, val total: Int, val modelName: String)
@@ -107,6 +111,7 @@ class VoiceManager(application: Application) {
                 _state.value = VoiceState.READY
                 finalResult?.invoke("")
             }
+            override fun onLevel(level: Float) { _micLevel.value = level }
         })
         ttsEngine.setListener(object : SherpaTtsEngine.Listener {
             override fun onStart() { _state.value = VoiceState.SPEAKING }
@@ -178,18 +183,38 @@ class VoiceManager(application: Application) {
     }
 
     suspend fun speak(text: String): Boolean {
-        PilotLogger.i(TAG, "TTS speak: ${text.take(80)}")
+        PilotLogger.i(TAG, "Speaking text: '${text.take(80)}'")
         if (!initialized) return false
         if (asrOnlyMode) {
             PilotLogger.i(TAG, "ASR-only mode: skipping audio output")
             return false
         }
-        return ttsEngine.speak(text)
+        _state.value = VoiceState.SPEAKING
+        var spoken = false
+        try {
+            spoken = onlineTts.speak(text)
+            if (!spoken) PilotLogger.w(TAG, "Online TTS failed; falling back to Piper")
+        } catch (e: Exception) {
+            PilotLogger.i(TAG, "Online TTS exception, falling back to Piper")
+        }
+        if (!spoken) {
+            try {
+                ttsEngine.speak(text)
+                spoken = true
+            } catch (e: Exception) {
+                PilotLogger.e(TAG, "Piper TTS also failed")
+            }
+        }
+        _state.value = VoiceState.READY
+        return spoken
     }
 
     fun isAsrOnly(): Boolean = initialized && asrOnlyMode
 
-    fun stopSpeaking() = ttsEngine.stop()
+    fun stopSpeaking() {
+        onlineTts.stop()
+        ttsEngine.stop()
+    }
 
     private fun fail(message: String): Boolean {
         PilotLogger.e(TAG, "VoiceManager failure: $message")
